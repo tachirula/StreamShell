@@ -2,5 +2,6 @@
   "uuid": "chat-overlay@test",
   "name": "Chat Overlay Test",
   "description": "Overlay transparente de prueba",
-  "shell-version": ["50"]
+  "shell-version": ["50"],
+  "settings-schema": "org.gnome.shell.extensions.chat-overlay"
 }

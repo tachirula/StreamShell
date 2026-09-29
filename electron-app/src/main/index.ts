@@ -2,6 +2,7 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+const tmi = require('tmi.js')
 
 function createWindow(): void {
   // Create the browser window.
@@ -35,6 +36,28 @@ function createWindow(): void {
   }
 }
 
+function startTwitchEngine(): void {
+  const client = new tmi.Client({
+    channels: ['juansguarnizo']
+  })
+
+  client.on('connected', (addr, port) => console.log(`[StreamShell Backend] Connected to ${addr}:${port}`))
+  client.on('disconnected', (reason) => console.log(`[StreamShell Backend] Disconnected: ${reason}`))
+
+  client.connect().catch(console.error)
+
+  client.on('message', (_channel, tags, message, self) => {
+    if (self) return
+
+    const user = tags['display-name'] || tags.username
+    const color = tags.color || '#8A2BE2'
+
+    console.log(`[StreamShell Backend] ${user} (${color}): ${message}`)
+
+    // TODO: Dispatch the event over D-Bus to GNOME Shell.
+  })
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
@@ -53,6 +76,7 @@ app.whenReady().then(() => {
   ipcMain.on('ping', () => console.log('pong'))
 
   createWindow()
+  startTwitchEngine()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

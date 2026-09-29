@@ -17,6 +17,7 @@ export default class ChatOverlayTest extends Extension {
     enable() {
         this._n = 0;
         this._lines = [];
+        this._settings = this.getSettings();
 
         this._box = new St.BoxLayout({
             vertical: true,
@@ -24,18 +25,22 @@ export default class ChatOverlayTest extends Extension {
             can_focus: false,
             track_hover: false,
             width: WIDTH,
-            style: 'background-color: rgba(0,0,0,0.35); border-radius: 12px; padding: 12px;',
         });
-        
+
         this._label = new St.Label({
             style: 'color: white; font-size: 16px;',
         });
 
-        // Inicializamos con set_markup
         this._label.get_clutter_text().set_markup('<b>Chat de prueba</b>');
-        
+
         this._box.add_child(this._label);
         Main.uiGroup.add_child(this._box);
+
+        this._applyStyle();
+        this._settingsId = this._settings.connect(
+            'changed::background-opacity',
+            () => this._applyStyle()
+        );
 
         this._reposition();
         this._startupId = Main.layoutManager.connect('startup-complete', () => this._reposition());
@@ -43,21 +48,29 @@ export default class ChatOverlayTest extends Extension {
 
         this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
             this._n++;
-            
+
             const color = TWITCH_COLORS[this._n % TWITCH_COLORS.length];
             const userMarkup = `<span color="${color}"><b>usuario${this._n}</b></span>`;
-            
-            const rawMessage = "hola! <3"; 
+
+            const rawMessage = "hola! <3";
             const safeMessage = GLib.markup_escape_text(rawMessage, -1);
-            
+
             this._lines.push(`${userMarkup}: ${safeMessage}`);
             this._lines = this._lines.slice(-MAX_LINES);
-            
-            // Usamos set_markup en lugar de .text para que interprete los colores
+
             this._label.get_clutter_text().set_markup(this._lines.join('\n'));
-            
+
             return GLib.SOURCE_CONTINUE;
         });
+    }
+
+    _applyStyle() {
+        if (!this._box || !this._settings)
+            return;
+        const opacity = this._settings.get_double('background-opacity');
+        this._box.set_style(
+            `background-color: rgba(0,0,0,${opacity}); border-radius: 12px; padding: 12px;`
+        );
     }
 
     _reposition() {
@@ -77,6 +90,10 @@ export default class ChatOverlayTest extends Extension {
         if (this._monitorsId)
             Main.layoutManager.disconnect(this._monitorsId);
         this._startupId = this._monitorsId = null;
+        if (this._settingsId)
+            this._settings.disconnect(this._settingsId);
+        this._settingsId = null;
+        this._settings = null;
         this._box?.destroy();
         this._box = null;
         this._label = null;
