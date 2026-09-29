@@ -1,0 +1,6 @@
+{
+  "uuid": "chat-overlay@test",
+  "name": "Chat Overlay Test",
+  "description": "Overlay transparente de prueba",
+  "shell-version": ["50"]
+}
