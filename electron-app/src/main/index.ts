@@ -183,7 +183,7 @@ app.whenReady().then(async () => {
   try {
     pendingGnomeStatus = await checkGnomeSetup(is.dev, REPO_EXTENSION_PATH)
     for (const w of pendingGnomeStatus.warnings) {
-      console.warn('[StreamShell Backend] GNOME warning:', w)
+      console.warn('[StreamShell Backend] GNOME warning:', w.key, w.params ?? '')
     }
   } catch (err) {
     console.error('[StreamShell Backend] checkGnomeSetup failed:', err)

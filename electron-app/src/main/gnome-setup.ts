@@ -6,9 +6,22 @@ import { dirname, join } from 'path'
 export const GNOME_EXTENSION_UUID = 'chat-overlay@test'
 export const GNOME_EXTENSION_NAME = 'Chat Overlay Test'
 
+export type GnomeWarningKey =
+  | 'repoNotFound'
+  | 'symlinkElsewhere'
+  | 'symlinkCheckFailed'
+  | 'schemaCompileFailed'
+  | 'staleWayland'
+  | 'staleGeneric'
+
+export interface GnomeWarning {
+  key: GnomeWarningKey
+  params?: Record<string, string>
+}
+
 export interface GnomeCheckResult {
-  /** Non-fatal issues. Shown to the user as a banner in the UI. */
-  warnings: string[]
+  /** Non-fatal issues. The renderer translates them via their key. */
+  warnings: GnomeWarning[]
   /** Fatal issues that prevent the overlay from working at all. */
   errors: string[]
   /** Set when the loaded extension.js is older than what's on disk. */
@@ -96,8 +109,8 @@ function detectWayland(): boolean {
  * Dev-mode only: ensure the extension directory is a symlink pointing at the
  * repo, so editing extension.js here is immediately visible on disk.
  */
-function ensureSymlink(repoExtensionPath: string): string[] {
-  const warnings: string[] = []
+function ensureSymlink(repoExtensionPath: string): GnomeWarning[] {
+  const warnings: GnomeWarning[] = []
   const installedPath = join(
     homedir(),
     '.local',
@@ -108,7 +121,7 @@ function ensureSymlink(repoExtensionPath: string): string[] {
   )
 
   if (!existsSync(repoExtensionPath)) {
-    warnings.push(`No encuentro ${repoExtensionPath}. ¿Moviste el repo?`)
+    warnings.push({ key: 'repoNotFound', params: { path: repoExtensionPath } })
     return warnings
   }
 
@@ -127,20 +140,23 @@ function ensureSymlink(repoExtensionPath: string): string[] {
 
     const target = readlinkSync(installedPath)
     if (target !== repoExtensionPath) {
-      warnings.push(
-        `El symlink de la extensión apunta a ${target}, no a ${repoExtensionPath}. ` +
-        `Bórralo y vuelve a abrir la app para que se recree.`
-      )
+      warnings.push({
+        key: 'symlinkElsewhere',
+        params: { actual: target, expected: repoExtensionPath }
+      })
     }
   } catch (err: any) {
-    warnings.push(`No pude verificar el symlink de la extensión: ${err?.message ?? err}`)
+    warnings.push({
+      key: 'symlinkCheckFailed',
+      params: { message: String(err?.message ?? err) }
+    })
   }
   return warnings
 }
 
 /** Ensures the GSettings schema is compiled and up to date. */
-async function ensureSchemaCompiled(repoExtensionPath: string): Promise<string[]> {
-  const warnings: string[] = []
+async function ensureSchemaCompiled(repoExtensionPath: string): Promise<GnomeWarning[]> {
+  const warnings: GnomeWarning[] = []
   const schemaDir = join(repoExtensionPath, 'schemas')
   const xmlPath = join(schemaDir, 'org.gnome.shell.extensions.chat-overlay.gschema.xml')
   const compiledPath = join(schemaDir, 'gschemas.compiled')
@@ -155,10 +171,10 @@ async function ensureSchemaCompiled(repoExtensionPath: string): Promise<string[]
 
   const { ok, stderr } = await runAsync(`glib-compile-schemas ${schemaDir}`)
   if (!ok) {
-    warnings.push(
-      `No pude compilar el schema GSettings (${stderr || 'glib-compile-schemas falló'}). ` +
-      `Corre manualmente: glib-compile-schemas ${schemaDir}`
-    )
+    warnings.push({
+      key: 'schemaCompileFailed',
+      params: { message: stderr || 'glib-compile-schemas failed', schemaDir }
+    })
   }
   return warnings
 }
@@ -205,17 +221,10 @@ export async function checkGnomeSetup(
 
   result.needsRelogin = detectStaleExtension(repoExtensionPath)
 
-  if (result.needsRelogin && result.isWayland) {
-    result.warnings.push(
-      'Los archivos de la extensión han cambiado desde que iniciaste sesión. ' +
-      'En Wayland GNOME Shell no recarga extensiones en caliente: cierra sesión ' +
-      'y vuelve a entrar una vez para que los cambios surtan efecto.'
-    )
-  } else if (result.needsRelogin) {
-    result.warnings.push(
-      'Los archivos de la extensión han cambiado desde que iniciaste sesión. ' +
-      'Cierra sesión (o recarga GNOME Shell) para que los cambios surtan efecto.'
-    )
+  if (result.needsRelogin) {
+    result.warnings.push({
+      key: result.isWayland ? 'staleWayland' : 'staleGeneric'
+    })
   }
 
   return result
