@@ -1,28 +1,266 @@
 import { useState, useEffect, useRef, type ReactElement } from 'react'
 import twitchLogo from './assets/twitch-logo.png'
 import { t } from './i18n'
-import { getCachedAvatar, setCachedAvatar } from './avatar-cache'
+import { clearAvatarCache, getCachedAvatar, setCachedAvatar } from './avatar-cache'
 
 // --- SVGs Integrados ---
-const LoadingIcon = () => (
-  <svg className="spin-anim" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+const LoadingIcon = (): ReactElement => (
+  <svg
+    className="spin-anim"
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
     <path d="M21 12a9 9 0 1 1-6.219-8.56" />
   </svg>
 )
 
-const CancelIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+const CancelIcon = (): ReactElement => (
+  <svg
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
     <line x1="18" y1="6" x2="6" y2="18" />
     <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+)
+
+const SettingsIcon = (): ReactElement => (
+  <svg
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.7 2.94-.08-.02a1.7 1.7 0 0 0-1.75.5l-.06.06h-3.4l-.03-.08a1.7 1.7 0 0 0-1.4-1.18 1.7 1.7 0 0 0-1.36.5l-.06.06-2.94-1.7.02-.08a1.7 1.7 0 0 0-.5-1.75l-.06-.06v-3.4l.08-.03a1.7 1.7 0 0 0 1.18-1.4 1.7 1.7 0 0 0-.5-1.36l-.06-.06 1.7-2.94.08.02a1.7 1.7 0 0 0 1.75-.5l.06-.06h3.4l.03.08a1.7 1.7 0 0 0 1.4 1.18 1.7 1.7 0 0 0 1.36-.5l.06-.06 2.94 1.7-.02.08a1.7 1.7 0 0 0 .5 1.75l.06.06v3.4z" />
   </svg>
 )
 // -----------------------
 
 type Status = 'idle' | 'connecting' | 'connected' | 'error'
 
+interface Preferences {
+  chatWidth: number
+  maxVisibleMessages: number
+  historyEnabled: boolean
+  historyLimit: number
+}
+
 interface GnomeWarningView {
   key: string
   params?: Record<string, string>
+}
+
+function SettingsPanel({
+  preferences,
+  preferencesError,
+  onChange,
+  connected
+}: {
+  preferences: Preferences | null
+  preferencesError: string | null
+  onChange: (update: Partial<Preferences>) => void
+  connected: boolean
+}): ReactElement {
+  const [cacheBusy, setCacheBusy] = useState(false)
+  const [cacheMessage, setCacheMessage] = useState('')
+
+  const clearCache = async (): Promise<void> => {
+    setCacheBusy(true)
+    setCacheMessage('')
+    try {
+      await window.api.clearCache()
+      clearAvatarCache()
+      setCacheMessage(t('settings.cacheCleared'))
+    } catch (err) {
+      setCacheMessage(`${t('settings.cacheError')} ${String(err)}`)
+    } finally {
+      setCacheBusy(false)
+    }
+  }
+
+  const fieldStyle = { display: 'flex', flexDirection: 'column' as const, gap: '0.4rem' }
+  const rangeStyle = { width: '100%', accentColor: '#bf94ff', cursor: 'pointer' }
+
+  return (
+    <section
+      style={{
+        width: '350px',
+        maxWidth: '100%',
+        maxHeight: 'calc(100vh - 150px)',
+        overflowY: 'auto',
+        paddingRight: '0.5rem',
+        marginTop: '1.5rem',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '1.25rem'
+      }}
+    >
+      <h2 style={{ fontSize: '1.2rem', color: '#e0e0e0' }}>{t('settings.title')}</h2>
+      {preferencesError && (
+        <p role="alert" style={{ color: '#fca5a5' }}>
+          {preferencesError}
+        </p>
+      )}
+      {!preferences ? (
+        <p style={{ color: '#adadb8' }}>
+          {preferencesError
+            ? `${t('settings.loadError')} ${preferencesError}`
+            : t('panel.connecting')}
+        </p>
+      ) : (
+        <>
+          <fieldset
+            style={{
+              border: '1px solid #3f3f46',
+              borderRadius: '8px',
+              padding: '1rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1rem'
+            }}
+          >
+            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
+              {t('settings.chatSize')}
+            </legend>
+            <label style={fieldStyle}>
+              <span>
+                {t('settings.chatWidth')}: {preferences.chatWidth} px
+              </span>
+              <input
+                type="range"
+                min="280"
+                max="600"
+                step="20"
+                value={preferences.chatWidth}
+                onChange={(event) => onChange({ chatWidth: Number(event.target.value) })}
+                style={rangeStyle}
+              />
+            </label>
+            <label style={fieldStyle}>
+              <span>
+                {t('settings.visibleBeforeScroll')}: {preferences.maxVisibleMessages}
+              </span>
+              <input
+                type="range"
+                min="3"
+                max="20"
+                step="1"
+                value={preferences.maxVisibleMessages}
+                onChange={(event) => onChange({ maxVisibleMessages: Number(event.target.value) })}
+                style={rangeStyle}
+              />
+            </label>
+          </fieldset>
+
+          <fieldset
+            style={{
+              border: '1px solid #3f3f46',
+              borderRadius: '8px',
+              padding: '1rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem'
+            }}
+          >
+            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
+              {t('settings.history')}
+            </legend>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.6rem',
+                cursor: 'pointer'
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={preferences.historyEnabled}
+                onChange={(event) => onChange({ historyEnabled: event.target.checked })}
+                style={{ marginTop: '0.3rem', accentColor: '#9146ff' }}
+              />
+              <span>{t('settings.historyEnabled')}</span>
+            </label>
+            <label style={{ ...fieldStyle, opacity: preferences.historyEnabled ? 1 : 0.55 }}>
+              <span>
+                {t('settings.historyLimit')}: {preferences.historyLimit}
+              </span>
+              <input
+                type="range"
+                min="5"
+                max="100"
+                step="5"
+                value={preferences.historyLimit}
+                disabled={!preferences.historyEnabled}
+                onChange={(event) => onChange({ historyLimit: Number(event.target.value) })}
+                style={rangeStyle}
+              />
+            </label>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>{t('settings.historyRisk')}</p>
+          </fieldset>
+
+          <fieldset
+            style={{
+              border: '1px solid #3f3f46',
+              borderRadius: '8px',
+              padding: '1rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem'
+            }}
+          >
+            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>{t('settings.cache')}</legend>
+            <button
+              type="button"
+              onClick={clearCache}
+              disabled={connected || cacheBusy}
+              style={{
+                padding: '0.65rem',
+                border: '1px solid #52525b',
+                borderRadius: '6px',
+                background: connected || cacheBusy ? '#27272a' : '#3f3f46',
+                color: '#fff',
+                cursor: connected || cacheBusy ? 'not-allowed' : 'pointer'
+              }}
+            >
+              {cacheBusy ? t('panel.connecting') : t('settings.clearCache')}
+            </button>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
+              {connected ? t('settings.cacheStreaming') : t('settings.cacheRecommendation')}
+            </p>
+            {cacheMessage && (
+              <p
+                role="status"
+                style={{
+                  color: cacheMessage.startsWith(t('settings.cacheError')) ? '#fca5a5' : '#86efac'
+                }}
+              >
+                {cacheMessage}
+              </p>
+            )}
+          </fieldset>
+        </>
+      )}
+    </section>
+  )
 }
 
 function App(): ReactElement {
@@ -34,8 +272,29 @@ function App(): ReactElement {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [avatarLoading, setAvatarLoading] = useState(false)
   const [avatarLookupNonce, setAvatarLookupNonce] = useState(0)
+  const [showSettings, setShowSettings] = useState(false)
+  const [preferences, setPreferences] = useState<Preferences | null>(null)
+  const [preferencesError, setPreferencesError] = useState<string | null>(null)
 
   const prevNonceRef = useRef(0)
+
+  useEffect(() => {
+    window.api
+      .getPreferences()
+      .then(setPreferences)
+      .catch((err: unknown) => setPreferencesError(String(err)))
+  }, [])
+
+  useEffect(() => {
+    if (!preferences) return
+    const timer = setTimeout(() => {
+      window.api
+        .setPreferences(preferences)
+        .then(() => setPreferencesError(null))
+        .catch((err: unknown) => setPreferencesError(String(err)))
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [preferences])
 
   // Suscripción a los eventos REALES del backend
   useEffect(() => {
@@ -167,184 +426,233 @@ function App(): ReactElement {
       `}</style>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '0.5rem' }}>
-        <img src={twitchLogo} alt="Twitch Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
-        <h1 style={{ color: '#bf94ff', margin: 0 }}>StreamShell</h1>
-      </div>
-      <p style={{ color: '#adadb8', marginTop: 0 }}>{t('panel.subtitle')}</p>
-
-      {gnomeWarnings.length > 0 && !warningsDismissed && (
-        <div
-          style={{
-            marginTop: '1rem',
-            padding: '0.75rem 1rem',
-            borderLeft: '4px solid #f59e0b',
-            background: '#26262c',
-            borderRadius: '4px',
-            fontSize: '0.9rem',
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '12px',
-            width: '350px',
-            maxWidth: '100%',
-            animation: 'fadeIn 0.3s ease-in-out'
-          }}
-        >
-          <div style={{ flex: 1 }}>
-            <strong style={{ color: '#f59e0b' }}>{t('gnome.warningTitle')}</strong>
-            {gnomeWarnings.map((w, i) => (
-              <div key={i} style={{ marginTop: '4px', color: '#e0e0e0' }}>
-                {t(`gnome.warn.${w.key}`, w.params)}
-              </div>
-            ))}
-          </div>
-          <button
-            onClick={() => setWarningsDismissed(true)}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#a1a1aa',
-              cursor: 'pointer',
-              fontSize: '1rem',
-              padding: 0,
-              lineHeight: 1
-            }}
-            aria-label={t('gnome.dismiss')}
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      <div style={{ marginTop: '2.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', width: '350px', maxWidth: '100%' }}>
-        <label htmlFor="channel" style={{ fontWeight: '600' }}>{t('panel.channelLabel')}</label>
-
-        <div style={{ display: 'flex', alignItems: 'stretch', gap: '10px' }}>
-          <div
-            aria-hidden="true"
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '8px',
-              overflow: 'hidden',
-              background: '#0e0e10',
-              border: `2px solid ${avatarUrl ? '#9146FF' : '#3f3f46'}`,
-              flexShrink: 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'border-color 0.2s ease'
-            }}
-          >
-            {avatarUrl ? (
-              <img
-                src={avatarUrl}
-                alt=""
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
-            ) : (
-              <span
-                className={avatarLoading ? 'avatar-loading' : ''}
-                style={{
-                  color: channel.trim() ? '#bf94ff' : '#52525b',
-                  fontSize: '1.15rem',
-                  fontWeight: 'bold',
-                  userSelect: 'none'
-                }}
-              >
-                {initial}
-              </span>
-            )}
-          </div>
-
-          <input
-            id="channel"
-            type="text"
-            placeholder={t('panel.channelPlaceholder')}
-            value={channel}
-            disabled={inputDisabled}
-            onChange={(e) => setChannel(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAction()}
-            onBlur={() => setAvatarLookupNonce((n) => n + 1)}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              padding: '0.75rem',
-              borderRadius: '6px',
-              border: '2px solid #3f3f46',
-              background: inputDisabled ? '#27272a' : '#0e0e10',
-              color: inputDisabled ? '#a1a1aa' : '#fff',
-              fontSize: '1rem',
-              outline: 'none',
-              transition: 'all 0.2s ease'
-            }}
-          />
-        </div>
-
+        <img
+          src={twitchLogo}
+          alt="Twitch Logo"
+          style={{ width: '32px', height: '32px', objectFit: 'contain' }}
+        />
+        <h1 style={{ color: '#bf94ff', margin: 0, flex: 1 }}>StreamShell</h1>
         <button
-          className="action-btn"
-          onClick={handleAction}
+          type="button"
+          onClick={() => setShowSettings((visible) => !visible)}
+          aria-label={showSettings ? t('settings.back') : t('settings.open')}
+          aria-pressed={showSettings}
+          title={showSettings ? t('settings.back') : t('settings.open')}
           style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px',
-            padding: '0.75rem',
+            gap: '0.4rem',
+            padding: '0.5rem 0.65rem',
             borderRadius: '6px',
-            border: 'none',
-            background: btnColor,
-            color: 'white',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            fontSize: '1rem',
-            marginTop: '0.5rem',
-            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+            border: '1px solid #3f3f46',
+            background: showSettings ? '#3f3f46' : '#26262c',
+            color: '#e0e0e0',
+            cursor: 'pointer'
           }}
         >
-          {status === 'idle' && t('panel.connect')}
-          {status === 'error' && t('panel.retry')}
-          {status === 'connecting' && (
-            <>
-              <LoadingIcon />
-              {t('panel.connecting')}
-            </>
-          )}
-          {status === 'connected' && (
-            <>
-              <CancelIcon />
-              {t('panel.cancel')}
-            </>
-          )}
+          <SettingsIcon />
+          <span>{showSettings ? t('settings.back') : t('settings.open')}</span>
         </button>
       </div>
+      <p style={{ color: '#adadb8', marginTop: 0 }}>{t('panel.subtitle')}</p>
 
-      {status === 'connected' && (
-        <div
-          style={{
-            marginTop: '2rem',
-            padding: '1rem',
-            borderLeft: '4px solid #00ff7f',
-            background: '#26262c',
-            borderRadius: '4px',
-            animation: 'fadeIn 0.3s ease-in-out'
-          }}
-        >
-          {t('panel.status.connected')} <strong style={{ color: '#00ff7f' }}>{channel}</strong>
-        </div>
-      )}
+      {showSettings ? (
+        <SettingsPanel
+          preferences={preferences}
+          preferencesError={preferencesError}
+          connected={isConnected}
+          onChange={(update) =>
+            setPreferences((current) => (current ? { ...current, ...update } : current))
+          }
+        />
+      ) : (
+        <>
+          {gnomeWarnings.length > 0 && !warningsDismissed && (
+            <div
+              style={{
+                marginTop: '1rem',
+                padding: '0.75rem 1rem',
+                borderLeft: '4px solid #f59e0b',
+                background: '#26262c',
+                borderRadius: '4px',
+                fontSize: '0.9rem',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '12px',
+                width: '350px',
+                maxWidth: '100%',
+                animation: 'fadeIn 0.3s ease-in-out'
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <strong style={{ color: '#f59e0b' }}>{t('gnome.warningTitle')}</strong>
+                {gnomeWarnings.map((w, i) => (
+                  <div key={i} style={{ marginTop: '4px', color: '#e0e0e0' }}>
+                    {t(`gnome.warn.${w.key}`, w.params)}
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={() => setWarningsDismissed(true)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#a1a1aa',
+                  cursor: 'pointer',
+                  fontSize: '1rem',
+                  padding: 0,
+                  lineHeight: 1
+                }}
+                aria-label={t('gnome.dismiss')}
+              >
+                ✕
+              </button>
+            </div>
+          )}
 
-      {status === 'error' && (
-        <div
-          style={{
-            marginTop: '2rem',
-            padding: '1rem',
-            borderLeft: '4px solid #ef4444',
-            background: '#26262c',
-            borderRadius: '4px',
-            animation: 'fadeIn 0.3s ease-in-out'
-          }}
-        >
-          {t('panel.status.error')} <strong style={{ color: '#ef4444' }}>{errorMsg}</strong>
-        </div>
+          <div
+            style={{
+              marginTop: '2.5rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1rem',
+              width: '350px',
+              maxWidth: '100%'
+            }}
+          >
+            <label htmlFor="channel" style={{ fontWeight: '600' }}>
+              {t('panel.channelLabel')}
+            </label>
+
+            <div style={{ display: 'flex', alignItems: 'stretch', gap: '10px' }}>
+              <div
+                aria-hidden="true"
+                style={{
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  background: '#0e0e10',
+                  border: `2px solid ${avatarUrl ? '#9146FF' : '#3f3f46'}`,
+                  flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'border-color 0.2s ease'
+                }}
+              >
+                {avatarUrl ? (
+                  <img
+                    src={avatarUrl}
+                    alt=""
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  />
+                ) : (
+                  <span
+                    className={avatarLoading ? 'avatar-loading' : ''}
+                    style={{
+                      color: channel.trim() ? '#bf94ff' : '#52525b',
+                      fontSize: '1.15rem',
+                      fontWeight: 'bold',
+                      userSelect: 'none'
+                    }}
+                  >
+                    {initial}
+                  </span>
+                )}
+              </div>
+
+              <input
+                id="channel"
+                type="text"
+                placeholder={t('panel.channelPlaceholder')}
+                value={channel}
+                disabled={inputDisabled}
+                onChange={(e) => setChannel(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAction()}
+                onBlur={() => setAvatarLookupNonce((n) => n + 1)}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  padding: '0.75rem',
+                  borderRadius: '6px',
+                  border: '2px solid #3f3f46',
+                  background: inputDisabled ? '#27272a' : '#0e0e10',
+                  color: inputDisabled ? '#a1a1aa' : '#fff',
+                  fontSize: '1rem',
+                  outline: 'none',
+                  transition: 'all 0.2s ease'
+                }}
+              />
+            </div>
+
+            <button
+              className="action-btn"
+              onClick={handleAction}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                padding: '0.75rem',
+                borderRadius: '6px',
+                border: 'none',
+                background: btnColor,
+                color: 'white',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                fontSize: '1rem',
+                marginTop: '0.5rem',
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+              }}
+            >
+              {status === 'idle' && t('panel.connect')}
+              {status === 'error' && t('panel.retry')}
+              {status === 'connecting' && (
+                <>
+                  <LoadingIcon />
+                  {t('panel.connecting')}
+                </>
+              )}
+              {status === 'connected' && (
+                <>
+                  <CancelIcon />
+                  {t('panel.cancel')}
+                </>
+              )}
+            </button>
+          </div>
+
+          {status === 'connected' && (
+            <div
+              style={{
+                marginTop: '2rem',
+                padding: '1rem',
+                borderLeft: '4px solid #00ff7f',
+                background: '#26262c',
+                borderRadius: '4px',
+                animation: 'fadeIn 0.3s ease-in-out'
+              }}
+            >
+              {t('panel.status.connected')} <strong style={{ color: '#00ff7f' }}>{channel}</strong>
+            </div>
+          )}
+
+          {status === 'error' && (
+            <div
+              style={{
+                marginTop: '2rem',
+                padding: '1rem',
+                borderLeft: '4px solid #ef4444',
+                background: '#26262c',
+                borderRadius: '4px',
+                animation: 'fadeIn 0.3s ease-in-out'
+              }}
+            >
+              {t('panel.status.error')} <strong style={{ color: '#ef4444' }}>{errorMsg}</strong>
+            </div>
+          )}
+        </>
       )}
     </div>
   )
