@@ -2,6 +2,12 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import {
+  checkGnomeSetup,
+  ensureGnomeExtensionEnabled,
+  resolveRepoExtensionPath,
+  type GnomeCheckResult
+} from './gnome-setup'
 
 const tmi = require('tmi.js')
 const dbus = require('dbus-next')
@@ -23,6 +29,9 @@ let chatInterface: any = null
 let twitchClient: any = null
 let mainWindow: BrowserWindow | null = null
 let joinTimeout: NodeJS.Timeout | null = null
+let pendingGnomeStatus: GnomeCheckResult | null = null
+
+const REPO_EXTENSION_PATH = resolveRepoExtensionPath()
 
 async function initDBus() {
   try {
@@ -61,8 +70,6 @@ function connectToTwitch(channel: string): void {
 
   twitchClient = new tmi.Client({ channels: [channel] })
 
-  // El WebSocket se abrió, pero Twitch todavía no confirmó el JOIN.
-  // No emitimos 'twitch:connected' todavía: puede fallar el JOIN.
   twitchClient.on('connected', (addr: string, port: number) => {
     console.log(`[StreamShell Backend] WebSocket abierto con ${addr}:${port}, esperando JOIN...`)
     clearJoinTimeout()
@@ -75,7 +82,6 @@ function connectToTwitch(channel: string): void {
     }, 8000)
   })
 
-  // Este es el evento que confirma que estamos DENTRO del canal.
   twitchClient.on('join', (_ch: string, _user: string, self: boolean) => {
     if (!self) return
     clearJoinTimeout()
@@ -83,8 +89,6 @@ function connectToTwitch(channel: string): void {
     sendToRenderer('twitch:connected', { channel })
   })
 
-  // Twitch manda NOTICEs con msg-id cuando algo va mal (canal inexistente,
-  // suspendido, rate limit, etc.). Los propagamos como error.
   twitchClient.on('notice', (_ch: string, msgid: string, message: string) => {
     console.warn(`[StreamShell Backend] notice ${msgid}: ${message}`)
     clearJoinTimeout()
@@ -132,6 +136,12 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => mainWindow?.show())
   mainWindow.on('closed', () => { mainWindow = null })
 
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (pendingGnomeStatus) {
+      mainWindow?.webContents.send('gnome:status', pendingGnomeStatus)
+    }
+  })
+
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
@@ -155,8 +165,26 @@ app.whenReady().then(async () => {
     teardownTwitchClient()
   })
 
+  // 1) D-Bus primero para que bus_watch_name vea el nombre ya presente.
   await initDBus()
+
+  // 2) Corremos los checks de GNOME. Dev: symlink + schema + stale check.
+  try {
+    pendingGnomeStatus = await checkGnomeSetup(is.dev, REPO_EXTENSION_PATH)
+    for (const w of pendingGnomeStatus.warnings) {
+      console.warn('[StreamShell Backend] GNOME warning:', w)
+    }
+  } catch (err) {
+    console.error('[StreamShell Backend] checkGnomeSetup failed:', err)
+    pendingGnomeStatus = { warnings: [], errors: [], needsRelogin: false, isWayland: false }
+  }
+
+  // 3) Habilitar la extensión (idempotente).
+  await ensureGnomeExtensionEnabled()
+
+  // 4) Ventana al final.
   createWindow()
+
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })
 
