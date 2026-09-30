@@ -10,5 +10,10 @@
       <summary>Animate emotes</summary>
       <description>Play animated emotes in the overlay. Turn off to show still frames.</description>
     </key>
+    <key name="toggle-chat-shortcut" type="as">
+      <default>[]</default>
+      <summary>Toggle chat overlay shortcut</summary>
+      <description>Keyboard shortcut to show or hide the chat overlay.</description>
+    </key>
   </schema>
 </schemalist>

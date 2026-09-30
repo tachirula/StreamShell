@@ -68,6 +68,79 @@ interface GnomeWarningView {
   params?: Record<string, string>
 }
 
+function acceleratorKey(event: KeyboardEvent<HTMLElement>): string | null {
+  const namedKeys: Record<string, string> = {
+    Backspace: 'BackSpace',
+    CapsLock: 'Caps_Lock',
+    Delete: 'Delete',
+    End: 'End',
+    Enter: 'Return',
+    Home: 'Home',
+    Insert: 'Insert',
+    PageDown: 'Page_Down',
+    PageUp: 'Page_Up',
+    PrintScreen: 'Print',
+    ScrollLock: 'Scroll_Lock',
+    Space: 'space',
+    Tab: 'Tab',
+    ArrowDown: 'Down',
+    ArrowLeft: 'Left',
+    ArrowRight: 'Right',
+    ArrowUp: 'Up'
+  }
+  if (namedKeys[event.key]) return namedKeys[event.key]
+  if (/^F([1-9]|1[0-2])$/.test(event.key)) return event.key
+  if (/^[a-zA-Z0-9]$/.test(event.key)) return event.key.toLowerCase()
+
+  const codeKeys: Record<string, string> = {
+    Minus: 'minus',
+    Equal: 'equal',
+    BracketLeft: 'bracketleft',
+    BracketRight: 'bracketright',
+    Backslash: 'backslash',
+    Semicolon: 'semicolon',
+    Quote: 'apostrophe',
+    Backquote: 'grave',
+    Comma: 'comma',
+    Period: 'period',
+    Slash: 'slash',
+    NumpadAdd: 'KP_Add',
+    NumpadSubtract: 'KP_Subtract',
+    NumpadMultiply: 'KP_Multiply',
+    NumpadDivide: 'KP_Divide',
+    NumpadDecimal: 'KP_Decimal',
+    NumpadEnter: 'KP_Enter'
+  }
+  return codeKeys[event.code] ?? null
+}
+
+function formatAccelerator(accelerator: string): string {
+  return accelerator
+    .replaceAll('<Control>', 'Ctrl')
+    .replaceAll('<Shift>', 'Shift')
+    .replaceAll('<Alt>', 'Alt')
+    .replaceAll('<Mod5>', 'AltGr')
+}
+
+function formatShortcut(shortcut: string): string {
+  const modifiers: string[] = []
+  const key = shortcut.replace(/<(Control|Shift|Alt|Mod5)>/g, (modifier) => {
+    modifiers.push(formatAccelerator(modifier))
+    return ''
+  })
+  const keyLabels: Record<string, string> = {
+    BackSpace: 'Backspace',
+    Caps_Lock: 'Caps Lock',
+    Page_Down: 'Page Down',
+    Page_Up: 'Page Up',
+    Print: 'Print Screen',
+    Scroll_Lock: 'Scroll Lock',
+    space: 'Space'
+  }
+  const keyLabel = keyLabels[key] ?? (/^[a-z]$/.test(key) ? key.toUpperCase() : key)
+  return [...modifiers, keyLabel].join(' + ')
+}
+
 function SettingsPanel({
   preferences,
   preferencesError,
@@ -81,6 +154,8 @@ function SettingsPanel({
 }): ReactElement {
   const [cacheBusy, setCacheBusy] = useState(false)
   const [cacheMessage, setCacheMessage] = useState('')
+  const [recordingShortcut, setRecordingShortcut] = useState(false)
+  const [shortcutHint, setShortcutHint] = useState('')
 
   const clearCache = async (): Promise<void> => {
     setCacheBusy(true)
@@ -99,8 +174,53 @@ function SettingsPanel({
   const fieldStyle = { display: 'flex', flexDirection: 'column' as const, gap: '0.4rem' }
   const rangeStyle = { width: '100%', accentColor: '#bf94ff', cursor: 'pointer' }
 
+  const onShortcutKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
+    if (!recordingShortcut) return
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (event.key === 'Escape') {
+      setRecordingShortcut(false)
+      setShortcutHint('')
+      return
+    }
+    if (event.key === 'Meta' || event.metaKey) {
+      setShortcutHint(t('settings.shortcutSuperReserved'))
+      return
+    }
+
+    const altGraph = event.getModifierState('AltGraph')
+    const modifiers: string[] = []
+    if (!altGraph && event.ctrlKey) modifiers.push('<Control>')
+    if (!altGraph && event.altKey) modifiers.push('<Alt>')
+    if (altGraph) modifiers.push('<Mod5>')
+    if (event.shiftKey) modifiers.push('<Shift>')
+
+    if (['Control', 'Shift', 'Alt', 'AltGraph'].includes(event.key)) {
+      setShortcutHint(
+        `${t('settings.shortcutRecording')} ${modifiers.map(formatAccelerator).join(' + ')}`
+      )
+      return
+    }
+
+    const key = acceleratorKey(event)
+    if (!key) {
+      setShortcutHint(t('settings.shortcutUnsupportedKey'))
+      return
+    }
+    if (modifiers.length === 0) {
+      setShortcutHint(t('settings.shortcutNeedsModifier'))
+      return
+    }
+
+    onChange({ toggleChatShortcut: `${modifiers.join('')}${key}` })
+    setRecordingShortcut(false)
+    setShortcutHint('')
+  }
+
   return (
     <section
+      onKeyDownCapture={onShortcutKeyDown}
       style={{
         width: '350px',
         maxWidth: '100%',
@@ -127,6 +247,70 @@ function SettingsPanel({
         </p>
       ) : (
         <>
+          <fieldset
+            style={{
+              border: '1px solid #3f3f46',
+              borderRadius: '8px',
+              padding: '1rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem'
+            }}
+          >
+            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
+              {t('settings.chatShortcut')}
+            </legend>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setRecordingShortcut((recording) => !recording)
+                  setShortcutHint('')
+                }}
+                style={{
+                  flex: 1,
+                  padding: '0.65rem',
+                  border: '1px solid #52525b',
+                  borderRadius: '6px',
+                  background: recordingShortcut ? '#5b21b6' : '#3f3f46',
+                  color: '#fff',
+                  cursor: 'pointer'
+                }}
+              >
+                {recordingShortcut
+                  ? t('settings.shortcutRecording')
+                  : preferences.toggleChatShortcut
+                    ? formatShortcut(preferences.toggleChatShortcut)
+                    : t('settings.shortcutNotSet')}
+              </button>
+              {preferences.toggleChatShortcut && (
+                <button
+                  type="button"
+                  onClick={() => onChange({ toggleChatShortcut: '' })}
+                  style={{
+                    padding: '0.65rem',
+                    border: '1px solid #52525b',
+                    borderRadius: '6px',
+                    background: '#3f3f46',
+                    color: '#fff',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {t('settings.shortcutClear')}
+                </button>
+              )}
+            </div>
+            {(recordingShortcut || shortcutHint) && (
+              <p role="status" style={{ color: '#c4b5fd', fontSize: '0.85rem' }}>
+                {shortcutHint || t('settings.shortcutInstruction')}
+              </p>
+            )}
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>{t('settings.shortcutWayland')}</p>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
+              {t('settings.shortcutHardwareNote')}
+            </p>
+          </fieldset>
+
           <fieldset
             style={{
               border: '1px solid #3f3f46',

@@ -2,6 +2,8 @@ import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -60,6 +62,7 @@ const MAX_WORD_LEN = 28;
 // key that switches animation on/off.
 const MAX_ANIMATED = 16;
 const SETTING_ANIMATED = 'animated-emotes';
+const SETTING_TOGGLE_CHAT = 'toggle-chat-shortcut';
 
 const BUS_NAME = 'org.streamshell.Twitch';
 const OBJECT_PATH = '/org/streamshell/Twitch/Chat';
@@ -95,6 +98,9 @@ export default class ChatOverlayTest extends Extension {
         this._maxVisibleMessages = DEFAULT_MAX_VISIBLE_MESSAGES;
         this._historyEnabled = false;
         this._historyLimit = 20;
+        this._userHidden = false;
+        this._toggleChatShortcut = '';
+        this._keybindingRegistered = false;
 
         // Reposicionamiento — siempre conectado, es barato.
         this._startupId = Main.layoutManager.connect('startup-complete', () => this._reposition());
@@ -205,26 +211,61 @@ export default class ChatOverlayTest extends Extension {
         try {
             this._settings = this.getSettings();
         } catch (e) {
-            console.warn(`[StreamShell] settings unavailable, animations stay on: ${e}`);
+            console.warn(`[StreamShell] settings unavailable: ${e}`);
             return;
         }
 
-        // Reading a key that isn't in the compiled schema aborts gnome-shell,
-        // so check the schema first.
-        if (!this._settings.settings_schema.has_key(SETTING_ANIMATED)) {
+        if (this._settings.settings_schema.has_key(SETTING_TOGGLE_CHAT))
+            this._toggleChatShortcut = this._settings.get_strv(SETTING_TOGGLE_CHAT)[0] ?? '';
+
+        if (this._settings.settings_schema.has_key(SETTING_ANIMATED)) {
+            this._settingsId = this._settings.connect(
+                `changed::${SETTING_ANIMATED}`, () => this._applyAnimationSetting());
+            this._applyAnimationSetting();
+        } else {
             console.warn(`[StreamShell] schema has no '${SETTING_ANIMATED}' key, animations stay on`);
-            this._settings = null;
-            return;
         }
 
-        this._settingsId = this._settings.connect(
-            `changed::${SETTING_ANIMATED}`, () => this._applyAnimationSetting());
-        this._applyAnimationSetting();
+        if (this._settings.settings_schema.has_key(SETTING_TOGGLE_CHAT)) {
+            Main.wm.addKeybinding(
+                SETTING_TOGGLE_CHAT,
+                this._settings,
+                Meta.KeyBindingFlags.NONE,
+                Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
+                () => this._toggleOverlay()
+            );
+            this._keybindingRegistered = true;
+            this._applyChatShortcutSetting();
+        } else {
+            console.warn(
+                `[StreamShell] schema has no '${SETTING_TOGGLE_CHAT}' key; compile the schema and reload GNOME Shell`
+            );
+        }
     }
 
     _applyAnimationSetting() {
         if (!this._animator || !this._settings) return;
         this._animator.setEnabled(this._settings.get_boolean(SETTING_ANIMATED));
+    }
+
+    _applyChatShortcutSetting() {
+        if (!this._settings ||
+            !this._settings.settings_schema.has_key(SETTING_TOGGLE_CHAT))
+            return;
+
+        const accelerators = this._toggleChatShortcut ? [this._toggleChatShortcut] : [];
+        if (this._settings.get_strv(SETTING_TOGGLE_CHAT).join('\0') !== accelerators.join('\0'))
+            this._settings.set_strv(SETTING_TOGGLE_CHAT, accelerators);
+    }
+
+    _toggleOverlay() {
+        if (!this._backendAvailable || !this._box) return;
+        this._userHidden = !this._userHidden;
+        if (this._userHidden || this._overviewOpen)
+            this._box.hide();
+        else
+            this._box.show();
+        this._syncAnimatorPause();
     }
 
     _onBackendAppeared() {
@@ -721,6 +762,10 @@ export default class ChatOverlayTest extends Extension {
         this._startupId = this._monitorsId = null;
 
         this._alive = false;
+        if (this._keybindingRegistered) {
+            Main.wm.removeKeybinding(SETTING_TOGGLE_CHAT);
+            this._keybindingRegistered = false;
+        }
         if (this._settings && this._settingsId)
             this._settings.disconnect(this._settingsId);
         this._settings = null;

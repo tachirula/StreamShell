@@ -17,6 +17,20 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     'settings.open': 'Settings',
     'settings.title': 'Settings',
     'settings.back': 'Back to chat',
+    'settings.chatShortcut': 'Chat visibility shortcut',
+    'settings.shortcutNotSet': 'Not set',
+    'settings.shortcutClear': 'Clear',
+    'settings.shortcutRecording': 'Recording… press a key combination',
+    'settings.shortcutInstruction':
+      'Hold one or more modifiers, then press the key. Press Escape to cancel. Super/Windows is reserved.',
+    'settings.shortcutSuperReserved': 'Super/Windows is reserved by GNOME.',
+    'settings.shortcutUnsupportedKey': 'This key cannot be used for a shortcut.',
+    'settings.shortcutNeedsModifier':
+      'Add at least one modifier such as Ctrl, Shift, Alt or AltGr.',
+    'settings.shortcutWayland':
+      'On Wayland, log out and back in once after this update so GNOME Shell can load the shortcut keybinding.',
+    'settings.shortcutHardwareNote':
+      'Fn is handled by many keyboards before the operating system and may not be recordable. Some system keys can be reserved by GNOME.',
     'settings.chatSize': 'Chat size',
     'settings.chatWidth': 'Maximum width',
     'settings.visibleBeforeScroll': 'Messages visible before scrolling',
@@ -58,6 +72,20 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     'settings.open': 'Configuración',
     'settings.title': 'Configuración',
     'settings.back': 'Volver al chat',
+    'settings.chatShortcut': 'Atajo para mostrar u ocultar el chat',
+    'settings.shortcutNotSet': 'Sin asignar',
+    'settings.shortcutClear': 'Borrar',
+    'settings.shortcutRecording': 'Grabando… presiona una combinación',
+    'settings.shortcutInstruction':
+      'Mantén uno o más modificadores y luego presiona la tecla. Escape cancela. Super/Windows está reservada.',
+    'settings.shortcutSuperReserved': 'Super/Windows está reservada por GNOME.',
+    'settings.shortcutUnsupportedKey': 'Esta tecla no se puede usar en un atajo.',
+    'settings.shortcutNeedsModifier':
+      'Agrega al menos un modificador, como Ctrl, Shift, Alt o AltGr.',
+    'settings.shortcutWayland':
+      'En Wayland, cierra sesión y vuelve a entrar una vez después de esta actualización para que GNOME Shell cargue el atajo.',
+    'settings.shortcutHardwareNote':
+      'Muchos teclados procesan Fn antes de enviarla al sistema, por lo que quizá no se pueda grabar. GNOME también puede reservar algunas teclas del sistema.',
     'settings.chatSize': 'Tamaño del chat',
     'settings.chatWidth': 'Ancho máximo',
     'settings.visibleBeforeScroll': 'Mensajes visibles antes de desplazar',
