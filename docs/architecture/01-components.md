@@ -5,60 +5,58 @@ owns networking and application state; the renderer is a control surface; and
 the GNOME Shell extension owns on-screen chat rendering. The session bus is the
 boundary between Electron and GNOME.
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
+```mermaid
+flowchart LR
+  subgraph Twitch["☁ Twitch"]
+    IRC["IRC chat<br/>WebSocket"]
+    Helix["Helix API<br/>users and badges"]
+  end
 
-cloud "Twitch" {
-  component "IRC chat\nWebSocket" as IRC
-  component "Helix API\nusers and badges" as Helix
-}
-cloud "BTTV / FFZ / 7TV\ncatalog APIs and CDNs" as Catalogs
+  Catalogs["☁ BTTV / FFZ / 7TV<br/>catalog APIs and CDNs"]
 
-package "Electron application" {
-  component "React renderer\nsettings and connection UI" as UI
-  component "Preload API\nnarrow context bridge" as Preload
-  component "Electron main\nTwitch session, ordering,\npreferences and D-Bus" as Main
-  component "chat-segments\nTwitch ranges, third-party words,\nreply metadata" as Segmenter
-  component "twitch-badges\ncatalog and resolver" as Badges
-  component "third-party-emotes\nper-channel catalog" as ThirdParty
-  component "emote-cache\nbounded downloads and disk cache" as Cache
-  component "preferences\nvalidation and userData persistence" as Prefs
-}
+  subgraph Electron["Electron application"]
+    UI["React renderer<br/>settings and connection UI"]
+    Preload["Preload API<br/>narrow context bridge"]
+    Main["Electron main<br/>Twitch session, ordering,<br/>preferences and D-Bus"]
+    Segmenter["chat-segments<br/>Twitch ranges, third-party words,<br/>reply metadata"]
+    Badges["twitch-badges<br/>catalog and resolver"]
+    ThirdParty["third-party-emotes<br/>per-channel catalog"]
+    Cache["emote-cache<br/>bounded downloads and disk cache"]
+    Prefs["preferences<br/>validation and userData persistence"]
+  end
 
-node "Linux user session" {
-  component "D-Bus session bus" as Bus
-  component "GSettings API" as GSettings
+  subgraph Linux["Linux user session"]
+    Bus["D-Bus session bus"]
+    GSettings["GSettings API"]
 
-  package "GNOME Shell extension" {
-    component "extension.js\nlifecycle, overlay, history,\nsettings and keybinding" as Extension
-    component "animator.js\nshared animated frames" as Animator
-    component "St / Clutter actors\nmessage rows and icons" as Actors
-  }
-}
+    subgraph Shell["GNOME Shell extension"]
+      Extension["extension.js<br/>lifecycle, overlay, history,<br/>settings and keybinding"]
+      Animator["animator.js<br/>shared animated frames"]
+      Actors["St / Clutter actors<br/>message rows and icons"]
+    end
+  end
 
-UI <--> Preload : typed IPC API
-Preload <--> Main : Electron IPC
-Main --> Segmenter
-Main --> Badges
-Main --> ThirdParty
-Segmenter --> Cache : resolve image
-Badges --> Cache : cache badge image
-Cache ..> Segmenter : return local paths
-Cache ..> Badges : return local paths
-Segmenter --> ThirdParty : whole-word code lookup
-Main --> Prefs
-IRC --> Main : chat messages
-Helix --> Main : broadcaster and badge data
-ThirdParty --> Catalogs : load catalogs
-Cache --> Catalogs : fetch emote assets
-Main --> Bus : MessageReceived, ChatCleared,\nHistoryMessageReceived,\nOverlaySettingsChanged
-Bus --> Extension : signals
-Extension <--> GSettings : read, update, observe
-Extension --> Animator
-Extension --> Actors
-Animator --> Actors
-@enduml
+  UI <-->|typed IPC API| Preload
+  Preload <-->|Electron IPC| Main
+  Main --> Segmenter
+  Main --> Badges
+  Main --> ThirdParty
+  Segmenter -->|resolve image| Cache
+  Badges -->|cache badge image| Cache
+  Cache -.->|return local paths| Segmenter
+  Cache -.->|return local paths| Badges
+  Segmenter -->|whole-word code lookup| ThirdParty
+  Main --> Prefs
+  IRC -->|chat messages| Main
+  Helix -->|broadcaster and badge data| Main
+  ThirdParty -->|load catalogs| Catalogs
+  Cache -->|fetch emote assets| Catalogs
+  Main -->|"MessageReceived, ChatCleared,<br/>HistoryMessageReceived,<br/>OverlaySettingsChanged"| Bus
+  Bus -->|signals| Extension
+  Extension <-->|read, update, observe| GSettings
+  Extension --> Animator
+  Extension --> Actors
+  Animator --> Actors
 ```
 
 ## Ownership and boundaries
