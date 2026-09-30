@@ -73,10 +73,10 @@ app preferences and GSettings for extension settings.
 
 ```mermaid
 flowchart LR
-  User["👤 Streamer / viewer"]
-  Twitch["👤 Twitch"]
-  EmoteAPIs["👤 Third-party emote APIs"]
-  Shell["👤 GNOME Shell"]
+  User["Streamer / viewer"]
+  Twitch["Twitch"]
+  EmoteAPIs["Third-party emote APIs"]
+  Shell["GNOME Shell"]
 
   subgraph System["StreamShell"]
     Connect(["Connect to channel"])
