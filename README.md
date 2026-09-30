@@ -19,5 +19,17 @@ panel for connection and preferences. The Electron main process reads Twitch
 chat and resolves assets; the GNOME extension renders the overlay over the
 desktop.
 
+<p align="center">
+  <img src="./.github/assets/first.gif" alt="StreamShell demo 1" width="700">
+</p>
+
+<p align="center">
+  <img src="./.github/assets/second.gif" alt="StreamShell demo 2" width="700">
+</p>
+
+<p align="center">
+  <img src="./.github/assets/gameplay.gif" alt="StreamShell overlay during gameplay" width="700">
+</p>
+
 See the [documentation index](./docs/README.md) for installation, development,
 research references, and architecture diagrams.
