@@ -4,6 +4,7 @@ This document serves as the research log, tracking official documentation, techn
 
 ## 1. Twitch Developer (Chat & APIs)
 - **Twitch IRC (WebSockets):** Standard protocol for reading live chat and parsing tags. [Official Docs](https://dev.twitch.tv/docs/irc/)
+- **IRC Tags Reference:** Every chat message carries metadata (badges, color, display-name, emotes, ...). [Tags Reference](https://dev.twitch.tv/docs/irc/tags/)
 - **Twitch EventSub:** Recommended alternative for advanced event tracking. [EventSub Docs](https://dev.twitch.tv/docs/eventsub/)
 - **Twitch API Reference:** General endpoint reference for Helix. [API Reference](https://dev.twitch.tv/docs/api/reference)
 - **Channel Emotes API:** Used to fetch custom emote URLs and cache them locally. [Emotes Endpoint](https://dev.twitch.tv/docs/api/reference/#get-channel-emotes)
@@ -29,3 +30,19 @@ This document serves as the research log, tracking official documentation, techn
 - **Get Users Endpoint:** Helix endpoint `GET /helix/users` used to fetch `profile_image_url` for a channel. [Get Users](https://dev.twitch.tv/docs/api/reference/#get-users)
 - **Rate Limits:** 800 points/min per client ID for app tokens. Plenty for our on-demand avatar lookups. [Rate Limits](https://dev.twitch.tv/docs/api/guide/#rate-limits)
 - **dotenv:** Node library used to load `.env` files into `process.env` without hardcoding secrets. [dotenv](https://github.com/motdotla/dotenv)
+
+## 6. Chat Assets — Badges and Emotes
+
+### Badges
+- **Get Global Chat Badges:** `GET /helix/chat/badges/global` — the authoritative badge list for the platform. [Endpoint](https://dev.twitch.tv/docs/api/reference/#get-global-chat-badges)
+- **Get Channel Chat Badges:** `GET /helix/chat/badges?broadcaster_id={id}` — per-channel override for shared set_ids (subscriber tiers, etc.). [Endpoint](https://dev.twitch.tv/docs/api/reference/#get-channel-chat-badges)
+- **Badge Tag Format:** The IRC `badges` tag only carries ids (`moderator/1`, `subscriber/12`); the images come from Helix. Documented in the IRC Tags Reference above.
+
+### Emotes
+- **Emote CDN URL Scheme:** `https://static-cdn.jtvnw.net/emoticons/v2/<id>/<format>/dark/<scale>` where format is `static` (PNG) or `animated` (GIF). This is the canonical way to build an emote URL from the id in the IRC `emotes` tag. Not formally documented as a public API, but stable and used by every third-party client.
+- **IRC `emotes` tag format:** `emote_id:start-end,start-end/emote_id:...`. **Ranges are Unicode code points, not UTF-16 units** — a single emoji occupies 1 code point but 2 UTF-16 units. This is the source of the "why Array.from, not substring" comment in `chat-segments.ts`.
+
+### Animated GIF decoding inside GNOME Shell
+- **GdkPixbuf.PixbufAnimation:** Decodes animated GIFs frame by frame. [GdkPixbuf Reference](https://docs.gtk.org/gdk-pixbuf/class.PixbufAnimation.html)
+- **Cairo.ImageSurface / Cairo.Context:** Where each frame is uploaded so multiple actors can share the same bitmap. [Cairo API](https://www.cairographics.org/manual/)
+- **GLib.timeout_add:** Single source timer used by the animator instead of one timer per emote. [GLib Main Loop](https://docs.gtk.org/glib/main-loop.html)
