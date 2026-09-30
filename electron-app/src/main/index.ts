@@ -1,5 +1,9 @@
 import './load-env'
 
+import { getStreamerAvatar, getUserInfo } from './twitch-api'
+import { preloadBadges, resolveBadges } from './twitch-badges'
+import { buildSegments } from './chat-segments'
+
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -10,7 +14,6 @@ import {
   resolveRepoExtensionPath,
   type GnomeCheckResult
 } from './gnome-setup'
-import { getStreamerAvatar } from './twitch-api'
 
 const tmi = require('tmi.js')
 const dbus = require('dbus-next')
@@ -36,6 +39,8 @@ let chatInterface: any = null
 let twitchClient: any = null
 let mainWindow: BrowserWindow | null = null
 let joinTimeout: NodeJS.Timeout | null = null
+let broadcasterId: string | null = null
+let messageChain: Promise<void> = Promise.resolve()
 let pendingGnomeStatus: GnomeCheckResult | null = null
 
 const REPO_EXTENSION_PATH = resolveRepoExtensionPath()
@@ -102,6 +107,11 @@ function connectToTwitch(channel: string): void {
     clearJoinTimeout()
     console.log(`[StreamShell Backend] JOIN confirmado en: ${channel}`)
     sendToRenderer('twitch:connected', { channel })
+    broadcasterId = null
+    void getUserInfo(channel).then((info) => {
+      broadcasterId = info?.id ?? null
+      return preloadBadges(broadcasterId)
+    })
   })
 
   twitchClient.on('notice', (_ch: string, msgid: string, message: string) => {
@@ -122,7 +132,16 @@ function connectToTwitch(channel: string): void {
     const user = String(tags['display-name'] || tags.username || 'unknown')
     const color = String(tags.color || '#8A2BE2')
     const text = String(message)
-    if (chatInterface) chatInterface.MessageReceived(user, color, text)
+
+    messageChain = messageChain.then(async () => {
+      const [badges, segments] = await Promise.all([
+        resolveBadges(tags.badges, broadcasterId),
+        buildSegments(text, tags.emotes)
+      ])
+      if (chatInterface) {
+        chatInterface.MessageReceived(user, color, JSON.stringify({ badges, segments }))
+      }
+    })
   })
 
   twitchClient.connect().catch((err: Error) => {
