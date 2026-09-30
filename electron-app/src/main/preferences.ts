@@ -106,12 +106,42 @@ export async function loadPreferences(): Promise<AppPreferences> {
   const file = join(app.getPath('userData'), SETTINGS_FILE)
   try {
     const raw = await readFile(file, 'utf8')
+    let parsed: unknown
     try {
-      return validatePreferences(JSON.parse(raw))
+      parsed = JSON.parse(raw)
     } catch (err) {
       console.warn('[StreamShell Backend] Invalid preferences; using defaults:', err)
       return DEFAULT_PREFERENCES
     }
+    let migrated = false
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const stored = parsed as Record<string, unknown>
+      if (
+        typeof stored.maxConcurrentImageDownloads === 'number' &&
+        Number.isInteger(stored.maxConcurrentImageDownloads) &&
+        stored.maxConcurrentImageDownloads > MAX_CONCURRENT_IMAGE_DOWNLOADS
+      ) {
+        parsed = {
+          ...stored,
+          maxConcurrentImageDownloads: MAX_CONCURRENT_IMAGE_DOWNLOADS
+        }
+        migrated = true
+      }
+    }
+    let preferences: AppPreferences
+    try {
+      preferences = validatePreferences(parsed)
+    } catch (err) {
+      console.warn('[StreamShell Backend] Invalid preferences; using defaults:', err)
+      return DEFAULT_PREFERENCES
+    }
+    if (migrated) {
+      console.warn(
+        `[StreamShell Backend] Capped saved image download concurrency at ${MAX_CONCURRENT_IMAGE_DOWNLOADS}.`
+      )
+      await savePreferences(preferences)
+    }
+    return preferences
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return DEFAULT_PREFERENCES
     throw err

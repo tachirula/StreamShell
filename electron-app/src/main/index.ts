@@ -152,13 +152,21 @@ async function publishPreferences(): Promise<void> {
     const shouldReplayHistory = preferences.historyEnabled && activeChannel !== null
     const history = shouldReplayHistory ? chatHistory.slice(-preferences.historyLimit) : []
     const replay: { user: string; color: string; payload: string }[] = []
+    await thirdPartyEmotesReady
     for (const message of history) {
       if (revision !== preferenceRevision) return
       const segments = await buildSegments(message.text, message.emotes, { animated: false })
+      const displaySegments = message.reply
+        ? stripReplyMention(segments, message.reply.user)
+        : segments
       replay.push({
         user: message.user,
         color: message.color,
-        payload: JSON.stringify({ badges: message.badges, segments })
+        payload: JSON.stringify({
+          badges: message.badges,
+          segments: displaySegments,
+          reply: message.reply
+        })
       })
     }
 
@@ -195,6 +203,9 @@ function clearJoinTimeout(): void {
 function teardownTwitchClient(): void {
   clearJoinTimeout()
   activeChannel = null
+  broadcasterId = null
+  thirdPartyEmotesReady = Promise.resolve()
+  clearThirdPartyEmotes()
   if (twitchClient) {
     twitchClient.disconnect().catch(console.error)
     twitchClient = null
@@ -210,9 +221,10 @@ function connectToTwitch(channel: string): void {
   // mensajes anteriores y muestre de nuevo el placeholder.
   notifyOverlayClear()
 
-  twitchClient = new tmi.Client({ channels: [channel] })
+  const client = new tmi.Client({ channels: [channel] })
+  twitchClient = client
 
-  twitchClient.on('connected', (addr: string, port: number) => {
+  client.on('connected', (addr: string, port: number) => {
     console.log(`[StreamShell Backend] WebSocket abierto con ${addr}:${port}, esperando JOIN...`)
     clearJoinTimeout()
     joinTimeout = setTimeout(() => {
@@ -224,71 +236,91 @@ function connectToTwitch(channel: string): void {
     }, 8000)
   })
 
-  twitchClient.on('join', (_ch: string, _user: string, self: boolean) => {
-    if (!self) return
+  client.on('join', (_ch: string, _user: string, self: boolean) => {
+    if (!self || twitchClient !== client || activeChannel !== channel) return
     clearJoinTimeout()
     console.log(`[StreamShell Backend] JOIN confirmado en: ${channel}`)
     sendToRenderer('twitch:connected', { channel })
     broadcasterId = null
-    void getUserInfo(channel).then((info) => {
-      broadcasterId = info?.id ?? null
-      return preloadBadges(broadcasterId)
-    })
+    thirdPartyEmotesReady = getUserInfo(channel)
+      .then((info) => {
+        if (twitchClient !== client || activeChannel !== channel) return
+        broadcasterId = info?.id ?? null
+        void preloadBadges(broadcasterId).catch((error) => {
+          console.warn('[StreamShell Backend] Failed to preload chat badges:', error)
+        })
+        const emoteLoad =
+          preferences.thirdPartyEmotesEnabled && broadcasterId
+            ? loadThirdPartyEmotes(channel, broadcasterId, {
+                imageScale: preferences.emoteImageScale,
+                bestQuality: preferences.emoteBestQuality
+              })
+            : Promise.resolve()
+        return emoteLoad
+      })
+      .catch((error) => {
+        console.error('[StreamShell Backend] Failed to load channel emotes:', error)
+      })
   })
 
-  twitchClient.on('notice', (_ch: string, msgid: string, message: string) => {
+  client.on('notice', (_ch: string, msgid: string, message: string) => {
+    if (twitchClient !== client) return
     console.warn(`[StreamShell Backend] notice ${msgid}: ${message}`)
     clearJoinTimeout()
     sendToRenderer('twitch:error', { message })
     teardownTwitchClient()
   })
 
-  twitchClient.on('disconnected', (reason: string) => {
+  client.on('disconnected', (reason: string) => {
+    if (twitchClient !== client) return
     clearJoinTimeout()
     activeChannel = null
+    broadcasterId = null
+    thirdPartyEmotesReady = Promise.resolve()
+    clearThirdPartyEmotes()
     console.log(`[StreamShell Backend] Desconectado: ${reason}`)
     sendToRenderer('twitch:disconnected', { reason })
   })
 
-  twitchClient.on('message', (_channel: string, tags: any, message: string, self: boolean) => {
-    if (self) return
-    const user = String(tags['display-name'] || tags.username || 'unknown')
-    const color = String(tags.color || '#8A2BE2')
-    const text = String(message)
+  client.on(
+    'message',
+    (_channel: string, tags: Record<string, unknown>, message: string, self: boolean) => {
+      if (twitchClient !== client) return
+      if (self) return
+      const user = String(tags['display-name'] || tags.username || 'unknown')
+      const color = String(tags.color || '#8A2BE2')
+      const text = String(message)
+      const reply = getChatReply(tags, text)
+      const badgesTag = getStringRecord(tags.badges)
+      const emotes = getEmotePositions(tags.emotes)
 
-    messageChain = messageChain
-      .then(async () => {
-        let badges: string[] = []
-        let segments: Segment[] = [{ t: 'text', v: text }]
-        try {
-          ;[badges, segments] = await Promise.all([
-            resolveBadges(tags.badges, broadcasterId),
-            buildSegments(text, tags.emotes)
-          ])
-        } catch (err) {
-          console.warn('[StreamShell Backend] could not resolve message assets:', err)
-        }
-        const emotes =
-          tags.emotes && typeof tags.emotes === 'object'
-            ? Object.fromEntries(
-                Object.entries(tags.emotes as Record<string, string[]>).map(([id, positions]) => [
-                  id,
-                  [...positions]
-                ])
-              )
-            : null
-        if (activeChannel) {
-          chatHistory.push({ user, color, text, badges, emotes })
-          if (chatHistory.length > MAX_STORED_HISTORY) chatHistory.shift()
-        }
-        if (chatInterface) {
-          chatInterface.MessageReceived(user, color, JSON.stringify({ badges, segments }))
-        }
-      })
-      .catch((err) => console.error('[StreamShell Backend] message pipeline failed:', err))
-  })
+      messageChain = messageChain
+        .then(async () => {
+          let badges: string[] = []
+          let segments: Segment[] = [{ t: 'text', v: text }]
+          try {
+            await thirdPartyEmotesReady
+            ;[badges, segments] = await Promise.all([
+              resolveBadges(badgesTag, broadcasterId),
+              buildSegments(text, emotes)
+            ])
+            if (reply) segments = stripReplyMention(segments, reply.user)
+          } catch (err) {
+            console.warn('[StreamShell Backend] could not resolve message assets:', err)
+          }
+          if (activeChannel) {
+            chatHistory.push({ user, color, text, badges, emotes, reply })
+            if (chatHistory.length > MAX_STORED_HISTORY) chatHistory.shift()
+          }
+          if (chatInterface) {
+            chatInterface.MessageReceived(user, color, JSON.stringify({ badges, segments, reply }))
+          }
+        })
+        .catch((err) => console.error('[StreamShell Backend] message pipeline failed:', err))
+    }
+  )
 
-  twitchClient.connect().catch((err: Error) => {
+  client.connect().catch((err: Error) => {
     clearJoinTimeout()
     console.error('[StreamShell Backend] Error de conexión:', err)
     sendToRenderer('twitch:error', { message: err?.message ?? String(err) })

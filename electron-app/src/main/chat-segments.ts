@@ -146,8 +146,6 @@ export async function buildSegments(
   const chars = Array.from(message)
   const ranges = parseRanges(emotesTag, chars.length)
 
-  if (ranges.length === 0) return [{ t: 'text', v: message }]
-
   // Download every distinct emote in parallel (cacheImage dedupes and caches).
   const uniqueIds = [...new Set(ranges.map((r) => r.id))]
   const paths = new Map<string, string | null>()

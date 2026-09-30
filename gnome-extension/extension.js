@@ -82,15 +82,11 @@ export default class ChatOverlayTest extends Extension {
         this._nameWatchId = null;
         this._scrollValueId = 0;
         this._scrollEventId = 0;
-        this._scrollbarPressId = 0;
-        this._scrollbarReleaseId = 0;
-        this._scrollbarMappedId = 0;
         this._scrollSyncSourceId = 0;
-        this._scrollbar = null;
         this._alive = true;
         this._backendAvailable = false;
         this._followingLatest = true;
-        this._scrollbarDragging = false;
+        this._overviewOpen = Main.overview.visible;
         this._animator = null;
         this._settings = null;
         this._settingsId = 0;
@@ -108,11 +104,13 @@ export default class ChatOverlayTest extends Extension {
 
         // Ocultar durante Activities Overview (bug de alpha compositing).
         this._overviewShowingId = Main.overview.connect('showing', () => {
+            this._overviewOpen = true;
             if (this._box) this._box.hide();
             this._syncAnimatorPause();
         });
         this._overviewHidingId = Main.overview.connect('hiding', () => {
-            if (this._box) this._box.show();
+            this._overviewOpen = false;
+            if (this._box && !this._userHidden) this._box.show();
             this._syncAnimatorPause();
         });
 
@@ -178,6 +176,7 @@ export default class ChatOverlayTest extends Extension {
         );
 
         this._setupAnimator();
+        this._connectSettings();
 
         console.log(`[StreamShell] enabled, watching ${BUS_NAME}`);
     }
@@ -192,7 +191,7 @@ export default class ChatOverlayTest extends Extension {
             if (!this._alive) return;
             this._animator = new EmoteAnimator({maxAnimated: MAX_ANIMATED});
             this._syncAnimatorPause();
-            this._connectSettings();
+            this._applyAnimationSetting();
         }).catch(e => {
             console.warn(`[StreamShell] animated emotes unavailable: ${e}`);
         });
@@ -202,7 +201,8 @@ export default class ChatOverlayTest extends Extension {
         if (this._animator)
             this._animator.setPaused(
                 !this._backendAvailable ||
-                Main.overview.visible ||
+                this._overviewOpen ||
+                this._userHidden ||
                 (this._historyEnabled && !this._followingLatest)
             );
     }
@@ -282,6 +282,7 @@ export default class ChatOverlayTest extends Extension {
     _onBackendVanished() {
         console.log('[StreamShell] backend gone, hiding overlay');
         this._backendAvailable = false;
+        this._userHidden = false;
         this._syncAnimatorPause();
         this._hideBox();
     }
@@ -315,6 +316,10 @@ export default class ChatOverlayTest extends Extension {
             if (Number.isInteger(settings.historyLimit) &&
                 settings.historyLimit >= 5 && settings.historyLimit <= 100)
                 this._historyLimit = settings.historyLimit;
+            if (typeof settings.toggleChatShortcut === 'string') {
+                this._toggleChatShortcut = settings.toggleChatShortcut;
+                this._applyChatShortcutSetting();
+            }
             if (this._box) this._box.width = this._chatWidth;
             this._updateScrollView();
             if (!this._historyEnabled)
@@ -388,8 +393,6 @@ export default class ChatOverlayTest extends Extension {
             this._scrollValueId = scrollView.vadjustment.connect('notify', () => {
                 if (this._followingLatest)
                     this._scheduleScrollToLatest();
-                if (this._scrollbarDragging)
-                    this._syncFollowFromPosition();
             });
             this._scrollEventId = scrollView.connect('scroll-event', () => {
                 GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
@@ -398,18 +401,12 @@ export default class ChatOverlayTest extends Extension {
                 });
                 return Clutter.EVENT_PROPAGATE;
             });
-            this._scrollbarMappedId = scrollView.connect('notify::mapped', () => {
-                if (scrollView.mapped)
-                    this._connectScrollbar(scrollView);
-            });
-            if (scrollView.mapped)
-                this._connectScrollbar(scrollView);
         } catch (e) {
             console.warn(`[StreamShell] scroll controls unavailable; chat remains active: ${e}`);
         }
 
         // Si el overview está abierto justo ahora, nace oculto.
-        if (Main.overview.visible) {
+        if (this._overviewOpen || this._userHidden) {
             this._box.hide();
         }
 
@@ -422,19 +419,8 @@ export default class ChatOverlayTest extends Extension {
             this._scrollView.vadjustment.disconnect(this._scrollValueId);
         if (this._scrollEventId && this._scrollView)
             this._scrollView.disconnect(this._scrollEventId);
-        if (this._scrollbarMappedId && this._scrollView)
-            this._scrollView.disconnect(this._scrollbarMappedId);
-        if (this._scrollbarPressId && this._scrollbar)
-            this._scrollbar.disconnect(this._scrollbarPressId);
-        if (this._scrollbarReleaseId && this._scrollbar)
-            this._scrollbar.disconnect(this._scrollbarReleaseId);
         this._scrollValueId = 0;
         this._scrollEventId = 0;
-        this._scrollbarPressId = 0;
-        this._scrollbarReleaseId = 0;
-        this._scrollbarMappedId = 0;
-        this._scrollbar = null;
-        this._scrollbarDragging = false;
         if (this._scrollSyncSourceId) {
             GLib.Source.remove(this._scrollSyncSourceId);
             this._scrollSyncSourceId = 0;
@@ -445,27 +431,6 @@ export default class ChatOverlayTest extends Extension {
         this._linesBox = null;
         this._scrollView = null;
         this._newMessagesButton = null;
-    }
-
-    _connectScrollbar(scrollView) {
-        if (this._scrollbar) return;
-        try {
-            const scrollbar = scrollView.get_vscroll_bar();
-            if (!scrollbar) return;
-            this._scrollbar = scrollbar;
-            this._scrollbarPressId = scrollbar.connect('button-press-event', () => {
-                this._scrollbarDragging = true;
-                this._setFollowingLatest(false);
-                return Clutter.EVENT_PROPAGATE;
-            });
-            this._scrollbarReleaseId = scrollbar.connect('button-release-event', () => {
-                this._scrollbarDragging = false;
-                this._syncFollowFromPosition();
-                return Clutter.EVENT_PROPAGATE;
-            });
-        } catch (e) {
-            console.warn(`[StreamShell] scrollbar tracking unavailable: ${e}`);
-        }
     }
 
     _updateScrollView() {
@@ -660,7 +625,7 @@ export default class ChatOverlayTest extends Extension {
 
         for (const seg of segments) {
             if (seg.t === 'emote') {
-                const icon = this._makeIcon(seg.path, EMOTE_SIZE);
+                const icon = this._makeIcon(seg.path, EMOTE_SIZE, seg.animated !== false);
                 // If the icon can't be built, fall back to the emote's name.
                 if (icon) add(icon);
                 else if (seg.name) add(this._makeWord(String(seg.name), textStyle));
