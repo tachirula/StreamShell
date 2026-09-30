@@ -3,6 +3,7 @@ import { createHash } from 'crypto'
 import { existsSync, mkdirSync } from 'fs'
 import { readdir, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
+import { MAX_CONCURRENT_IMAGE_DOWNLOADS } from '../shared/settings-constraints'
 
 // Disk cache for remote images (badges, emotes).
 //
@@ -30,6 +31,12 @@ const known = new Map<string, string>()
 
 /** Downloads in progress: url -> promise (dedupes concurrent requests). */
 const inflight = new Map<string, Promise<FetchResult>>()
+const downloadQueue: Array<{
+  url: string
+  resolve: (result: FetchResult) => void
+}> = []
+let activeDownloads = 0
+let maxConcurrentDownloads = DEFAULT_MAX_CONCURRENT_DOWNLOADS
 
 function getCacheDir(): string {
   if (!cacheDir) {
@@ -63,12 +70,24 @@ function findCached(url: string): string | null {
 }
 
 function detectExt(bytes: Buffer): Ext {
-  return bytes.subarray(0, 3).toString('latin1') === 'GIF' ? 'gif' : 'png'
+  const header = bytes.subarray(0, 4).toString('latin1')
+  if (header === 'GIF8') return 'gif'
+  if (header === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp'
+  return 'png'
 }
 
 async function fetchToDisk(url: string): Promise<FetchResult> {
+  const controller = new AbortController()
+  let idleTimer: NodeJS.Timeout | null = null
+  const resetIdleTimer = (): void => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => controller.abort(), DOWNLOAD_IDLE_TIMEOUT_MS)
+  }
+
+  resetIdleTimer()
   try {
-    const res = await net.fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
+    const res = await net.fetch(url, { signal: controller.signal })
+    resetIdleTimer()
     if (!res.ok) {
       if (res.status !== 404) {
         console.warn('[StreamShell Backend] Image download failed:', res.status, url)
@@ -76,7 +95,28 @@ async function fetchToDisk(url: string): Promise<FetchResult> {
       return { ok: false, missing: res.status === 404 }
     }
 
-    const bytes = Buffer.from(await res.arrayBuffer())
+    if (!res.body) {
+      console.warn('[StreamShell Backend] Image download returned an empty body:', url)
+      return { ok: false, missing: false }
+    }
+
+    const reader = res.body.getReader()
+    const chunks: Buffer[] = []
+    let totalBytes = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value || value.byteLength === 0) continue
+      resetIdleTimer()
+      chunks.push(Buffer.from(value))
+      totalBytes += value.byteLength
+    }
+    if (totalBytes === 0) {
+      console.warn('[StreamShell Backend] Image download returned an empty body:', url)
+      return { ok: false, missing: false }
+    }
+
+    const bytes = Buffer.concat(chunks, totalBytes)
     const target = pathFor(url, detectExt(bytes))
 
     // Write to a temp file and rename, so a crash mid-write never leaves
@@ -86,9 +126,49 @@ async function fetchToDisk(url: string): Promise<FetchResult> {
     await rename(tmp, target)
     return { ok: true, path: target }
   } catch (err) {
-    console.warn('[StreamShell Backend] Image download errored:', url, err)
+    if (controller.signal.aborted) {
+      console.warn(
+        `[StreamShell Backend] Image download stalled for ${DOWNLOAD_IDLE_TIMEOUT_MS / 1000}s without progress:`,
+        url
+      )
+    } else {
+      console.warn('[StreamShell Backend] Image download errored:', url, err)
+    }
     return { ok: false, missing: false }
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer)
   }
+}
+
+function runDownloadQueue(): void {
+  while (activeDownloads < maxConcurrentDownloads && downloadQueue.length > 0) {
+    const next = downloadQueue.shift()
+    if (!next) return
+    activeDownloads++
+    void fetchToDisk(next.url)
+      .then(next.resolve)
+      .finally(() => {
+        activeDownloads--
+        runDownloadQueue()
+      })
+  }
+}
+
+export function setMaxConcurrentImageDownloads(limit: number): void {
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CONCURRENT_IMAGE_DOWNLOADS) {
+    throw new RangeError(
+      `Concurrent image downloads must be between 1 and ${MAX_CONCURRENT_IMAGE_DOWNLOADS}`
+    )
+  }
+  maxConcurrentDownloads = limit
+  runDownloadQueue()
+}
+
+function queueDownload(url: string): Promise<FetchResult> {
+  return new Promise((resolve) => {
+    downloadQueue.push({ url, resolve })
+    runDownloadQueue()
+  })
 }
 
 function resolveImage(url: string): Promise<FetchResult> {
@@ -104,7 +184,7 @@ function resolveImage(url: string): Promise<FetchResult> {
   const pending = inflight.get(url)
   if (pending) return pending
 
-  const job = fetchToDisk(url)
+  const job = queueDownload(url)
     .then((result) => {
       if (result.ok) known.set(url, result.path)
       return result

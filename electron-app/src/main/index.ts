@@ -292,6 +292,7 @@ app.whenReady().then(async () => {
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
   preferences = await loadPreferences()
+  setMaxConcurrentImageDownloads(preferences.maxConcurrentImageDownloads)
 
   ipcMain.on('set-twitch-channel', (_event, channel: string) => connectToTwitch(channel))
 
