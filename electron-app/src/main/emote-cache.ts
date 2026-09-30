@@ -1,7 +1,7 @@
 import { app, net } from 'electron'
 import { createHash } from 'crypto'
 import { existsSync, mkdirSync } from 'fs'
-import { rename, writeFile } from 'fs/promises'
+import { readdir, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 // Disk cache for remote images (badges, emotes).
@@ -21,9 +21,7 @@ const DOWNLOAD_TIMEOUT_MS = 4000
 type Ext = 'png' | 'gif'
 const EXTENSIONS: Ext[] = ['gif', 'png']
 
-type FetchResult =
-  | { ok: true; path: string }
-  | { ok: false; missing: boolean } // missing = HTTP 404
+type FetchResult = { ok: true; path: string } | { ok: false; missing: boolean } // missing = HTTP 404
 
 let cacheDir: string | null = null
 
@@ -127,6 +125,19 @@ export async function cacheImage(url: string): Promise<string | null> {
   return result.ok ? result.path : null
 }
 
+export async function clearImageCache(): Promise<void> {
+  const dir = getCacheDir()
+  const pending = [...inflight.values()]
+  await Promise.all(pending)
+
+  const files = await readdir(dir)
+  await Promise.all(files.map((file) => rm(join(dir, file), { recursive: true, force: true })))
+
+  known.clear()
+  noAnim.clear()
+  emoteInflight.clear()
+}
+
 // --- Emotes -----------------------------------------------------------------
 
 export type EmoteScale = '1.0' | '2.0' | '3.0'
@@ -177,7 +188,9 @@ async function loadEmote(id: string): Promise<string | null> {
  * Local path for a Twitch emote: the animated version (.gif) when it exists,
  * otherwise the static one (.png). Null if nothing could be downloaded.
  */
-export function cacheEmote(id: string): Promise<string | null> {
+export function cacheEmote(id: string, format: EmoteFormat = 'animated'): Promise<string | null> {
+  if (format === 'static') return cacheImage(twitchEmoteUrl(id, '2.0', 'static'))
+
   const pending = emoteInflight.get(id)
   if (pending) return pending
 
