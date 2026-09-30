@@ -6,7 +6,7 @@ declare global {
     api: {
       setChannel: (channel: string) => void
       disconnectChannel: () => void
-      onTwitchConnected: (cb: (data: { channel: string; addr: string; port: number }) => void) => () => void
+      onTwitchConnected: (cb: (data: { channel: string }) => void) => () => void
       onTwitchError: (cb: (data: { message: string }) => void) => () => void
       onTwitchDisconnected: (cb: (data: { reason: string }) => void) => () => void
     }
