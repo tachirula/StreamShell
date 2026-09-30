@@ -26,6 +26,7 @@ declare global {
     api: {
       setChannel: (channel: string) => void
       disconnectChannel: () => void
+      getStreamerAvatar: (channel: string) => Promise<string | null>
       onTwitchConnected: (cb: (data: { channel: string }) => void) => () => void
       onTwitchError: (cb: (data: { message: string }) => void) => () => void
       onTwitchDisconnected: (cb: (data: { reason: string }) => void) => () => void
