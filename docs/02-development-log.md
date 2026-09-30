@@ -160,3 +160,50 @@ There is no shared translation catalog between the two. This is deliberate: they
 
 ### 7.6 Wayland note
 The renderer respects `LANG=...` at launch (`LANG=es_ES.UTF-8 npm run dev`), because Chromium reads the locale from the environment. The extension does **not**: it reads the locale that GNOME Shell had when it started, which is fixed per session. Testing the extension in a different language requires a system-level language change and a full logout/login. This is expected behavior, not a bug.
+
+## 8. Streamer Avatar (Helix Integration)
+
+### 8.1 Goal
+Display the streamer's Twitch profile picture next to the channel input, making the panel feel more polished and giving immediate visual feedback that the typed channel actually exists.
+
+### 8.2 Auth — Client Credentials Grant
+- The avatar lookup hits `GET /helix/users?login={channel}`, which requires a Bearer token.
+- We use the **Client Credentials Grant** (server-to-server OAuth): no user login, no OAuth redirect, no scopes. The app authenticates as itself.
+- Credentials (`TWITCH_API_ID_CLIENT` and `TWITCH_API_SECRET_CLIENT`) come from a Twitch Developer Console app, loaded via `dotenv` from `electron-app/.env` (dev only, git-ignored).
+- The App Access Token is cached in `twitch-api.ts` until 5 minutes before expiry (`expires_in - 300`). Twitch tokens last ~60 days, so in practice the auth endpoint is hit once per process lifetime.
+
+### 8.3 Loading `.env` — the hoisting trap
+- Initial attempt: `import { config } from 'dotenv'; config()` at the top of `main/index.ts`. This **does not work**: TypeScript hoists all `import` statements above any other code in the compiled output, so `config()` ran after electron and every other module had already been evaluated. `process.env.TWITCH_API_*` were undefined everywhere.
+- **Fix:** the call was moved to `electron-app/src/main/load-env.ts`, and `main/index.ts` imports it as the very first statement (`import './load-env'`). Module load order is now deterministic and the env vars are populated before any other module reads them.
+- Diagnostic in the terminal on startup: `◇ injected env (2) from .env`. The number is the count of variables loaded — a hard check that the file was found and parsed.
+- **Pitfall:** the `.env` must live in `electron-app/` (next to the `package.json` that owns the code), because `process.cwd()` in dev is `electron-app/`. Putting it at the repo root silently loads 0 variables.
+
+### 8.4 Backend — `src/main/twitch-api.ts`
+- `getStreamerAvatar(channel)` validates the channel name against a Twitch-username regex, checks the in-memory cache, then (if needed) obtains a token and calls Helix.
+- Failures of any kind (bad channel, network, expired token, rate limit) resolve to `null`. The renderer treats `null` as "no avatar available" and keeps the initial-letter placeholder.
+- Results are cached in a `Map<channel, url|null>` for the process lifetime, so repeat lookups of the same channel are instant and free (0 Helix requests).
+- A second cache level lives in the renderer (see 8.6) so the avatar survives restarts.
+
+### 8.5 IPC bridge
+- New `ipcMain.handle('get-streamer-avatar', ...)` in `main/index.ts`, delegating to `getStreamerAvatar`.
+- Exposed via `ipcRenderer.invoke` in the preload as `window.api.getStreamerAvatar(channel)`.
+- Uses `invoke`/`handle` (promise-based) instead of `send`/`on`: the renderer needs the return value, not a fire-and-forget.
+
+### 8.6 Renderer — debounce + persistent cache
+- **Debounce:** the lookup is debounced by 2 seconds. 400ms was initially tried and proved far too short — humans type Twitch usernames at ~100–200ms per character, so a 400ms debounce fires mid-word and spams the API. 2s is long enough to catch natural pauses and short enough to feel responsive.
+- **Blur trigger:** `onBlur` on the input bumps a `avatarLookupNonce` counter, which forces the `useEffect` to run again immediately, bypassing the debounce. Effect: type the channel, click elsewhere → avatar appears at once.
+- **Persistent cache:** `avatar-cache.ts` stores `{ url, fetchedAt }` entries in `localStorage` under `streamshell.avatar-cache.v1`, with a 24h TTL.
+  - On lookup: if a cached value exists, it's rendered *immediately* (no loading flicker), and a background refresh runs in parallel.
+  - The TTL matters: if the streamer changes their profile picture, users see the new one within a day without us hitting the API on every keystroke.
+  - `getCachedAvatar` returns three distinct values: `undefined` (never fetched), `null` (fetched, confirmed not to exist), or `string` (URL). This lets the UI show a loading pulse only on the first cold lookup.
+- **Stable across status changes:** the avatar `useEffect` deliberately does *not* depend on `status`. Toggling Connect/Cancel no longer re-triggers a lookup, so the image stays put during normal use.
+
+### 8.7 UX
+- 44×44 square with 8px rounded corners, matching the input's `border-radius`. Border is dark grey by default, Twitch purple (`#9146FF`) when a real avatar is loaded.
+- While loading a cold lookup, the placeholder initial pulses (subtle opacity animation). Once a real image or `null` result arrives, the pulse stops.
+- Empty input → grey `?`. Non-empty input with no avatar → first letter of the channel, in Twitch purple.
+
+### 8.8 What we don't do (yet)
+- No rate limit handling beyond "return null on 429". Our usage is a handful of requests per dev session — nowhere near Twitch's 800 points/min budget.
+- No user OAuth. We don't need to read private data, so we don't ask users to authorize anything.
+- No avatar for chatters (only the channel owner). That would need per-user lookups on every message, which is a different design discussion.
