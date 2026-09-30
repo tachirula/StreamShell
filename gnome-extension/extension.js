@@ -52,6 +52,11 @@ const EMOTE_SIZE = 24;
 // overflow the box.
 const MAX_WORD_LEN = 28;
 
+// Animated emotes: max distinct animated emotes at once, and the GSettings
+// key that switches animation on/off.
+const MAX_ANIMATED = 16;
+const SETTING_ANIMATED = 'animated-emotes';
+
 const BUS_NAME = 'org.streamshell.Twitch';
 const OBJECT_PATH = '/org/streamshell/Twitch/Chat';
 const INTERFACE = 'org.streamshell.Twitch.Chat';
@@ -64,6 +69,11 @@ export default class ChatOverlayTest extends Extension {
         this._signalId = null;
         this._clearSignalId = null;
         this._nameWatchId = null;
+        this._alive = true;
+        this._backendAvailable = false;
+        this._animator = null;
+        this._settings = null;
+        this._settingsId = 0;
 
         // Reposicionamiento — siempre conectado, es barato.
         this._startupId = Main.layoutManager.connect('startup-complete', () => this._reposition());
@@ -72,9 +82,11 @@ export default class ChatOverlayTest extends Extension {
         // Ocultar durante Activities Overview (bug de alpha compositing).
         this._overviewShowingId = Main.overview.connect('showing', () => {
             if (this._box) this._box.hide();
+            this._syncAnimatorPause();
         });
         this._overviewHidingId = Main.overview.connect('hiding', () => {
             if (this._box) this._box.show();
+            this._syncAnimatorPause();
         });
 
         // Suscripción al signal D-Bus de mensajes.
@@ -113,16 +125,69 @@ export default class ChatOverlayTest extends Extension {
             () => this._onBackendVanished()
         );
 
+        this._setupAnimator();
+
         console.log(`[StreamShell] enabled, watching ${BUS_NAME}`);
+    }
+
+    // --- Animated emotes ----------------------------------------------------
+
+    _setupAnimator() {
+        // Loaded dynamically: if something is missing in the Shell (e.g.
+        // GdkPixbuf can't be imported) emotes degrade to static images
+        // instead of breaking the whole extension.
+        import('./animator.js').then(({EmoteAnimator}) => {
+            if (!this._alive) return;
+            this._animator = new EmoteAnimator({maxAnimated: MAX_ANIMATED});
+            this._syncAnimatorPause();
+            this._connectSettings();
+        }).catch(e => {
+            console.warn(`[StreamShell] animated emotes unavailable: ${e}`);
+        });
+    }
+
+    _syncAnimatorPause() {
+        if (this._animator)
+            this._animator.setPaused(!this._backendAvailable || Main.overview.visible);
+    }
+
+    _connectSettings() {
+        try {
+            this._settings = this.getSettings();
+        } catch (e) {
+            console.warn(`[StreamShell] settings unavailable, animations stay on: ${e}`);
+            return;
+        }
+
+        // Reading a key that isn't in the compiled schema aborts gnome-shell,
+        // so check the schema first.
+        if (!this._settings.settings_schema.has_key(SETTING_ANIMATED)) {
+            console.warn(`[StreamShell] schema has no '${SETTING_ANIMATED}' key, animations stay on`);
+            this._settings = null;
+            return;
+        }
+
+        this._settingsId = this._settings.connect(
+            `changed::${SETTING_ANIMATED}`, () => this._applyAnimationSetting());
+        this._applyAnimationSetting();
+    }
+
+    _applyAnimationSetting() {
+        if (!this._animator || !this._settings) return;
+        this._animator.setEnabled(this._settings.get_boolean(SETTING_ANIMATED));
     }
 
     _onBackendAppeared() {
         console.log('[StreamShell] backend detected, showing overlay');
+        this._backendAvailable = true;
+        this._syncAnimatorPause();
         this._showBox();
     }
 
     _onBackendVanished() {
         console.log('[StreamShell] backend gone, hiding overlay');
+        this._backendAvailable = false;
+        this._syncAnimatorPause();
         this._hideBox();
     }
 
@@ -189,9 +254,23 @@ export default class ChatOverlayTest extends Extension {
     // --- Rendering ----------------------------------------------------------
 
     _makeIcon(path, size) {
-        // Only accept absolute PNG paths (they come from our own backend).
-        if (typeof path !== 'string' || !path.startsWith('/') || !path.endsWith('.png'))
+        try {
+            return this._makeIconUnsafe(path, size);
+        } catch (e) {
+            console.warn(`[StreamShell] icon failed for ${path}: ${e}\n${e.stack}`);
             return null;
+        }
+    }
+
+    _makeIconUnsafe(path, size) {
+        // Only accept absolute PNG/GIF paths (they come from our own backend).
+        if (typeof path !== 'string' || !path.startsWith('/') || !/\.(png|gif)$/.test(path))
+            return null;
+
+        if (path.endsWith('.gif') && this._animator) {
+            const animated = this._animator.makeActor(path, size);
+            if (animated) return animated;
+        }
 
         return new St.Icon({
             gicon: new Gio.FileIcon({file: Gio.File.new_for_path(path)}),
@@ -276,6 +355,21 @@ export default class ChatOverlayTest extends Extension {
         }
     }
 
+    _addFallbackLine(user, payload) {
+        const {segments} = this._parsePayload(payload);
+        const text = segments
+            .map(s => (s.t === 'emote' ? (s.name ?? '') : (s.v ?? '')))
+            .join('')
+            .trim();
+        const label = new St.Label({
+            text: `${user}: ${text}`,
+            style: `color: white; font-size: ${FONT_SIZE}px;`,
+            width: ROW_WIDTH,
+        });
+        label.get_clutter_text().set_line_wrap(true);
+        this._linesBox.add_child(label);
+    }
+
     _onMessageReceived(user, color, payload) {
         if (!this._linesBox) return;
 
@@ -292,9 +386,10 @@ export default class ChatOverlayTest extends Extension {
         try {
             this._fillMessage(msg, user, color, payload);
         } catch (e) {
-            console.error(`[StreamShell] failed to render message: ${e}`);
+            // Show the message as plain text rather than dropping it.
+            console.error(`[StreamShell] failed to render message: ${e}\n${e.stack}`);
             msg.destroy();
-            return;
+            this._addFallbackLine(user, payload);
         }
 
         // Keep only the last MAX_LINES messages.
@@ -335,6 +430,17 @@ export default class ChatOverlayTest extends Extension {
             Main.layoutManager.disconnect(this._monitorsId);
         this._startupId = this._monitorsId = null;
 
+        this._alive = false;
+        if (this._settings && this._settingsId)
+            this._settings.disconnect(this._settingsId);
+        this._settings = null;
+        this._settingsId = 0;
+
+        if (this._animator) {
+            this._animator.destroy();
+            this._animator = null;
+        }
+        this._backendAvailable = false;
         this._hideBox();
     }
 }
