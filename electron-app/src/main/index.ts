@@ -19,10 +19,14 @@ if (process.platform === 'linux') {
 class StreamShellInterface extends dbus.interface.Interface {
   constructor(name: string) { super(name) }
   MessageReceived(user: string, color: string, text: string) { return [user, color, text] }
+  ChatCleared() { return [] }
 }
 
 StreamShellInterface.configureMembers({
-  signals: { MessageReceived: { signature: 'sss', names: ['user', 'color', 'text'] } }
+  signals: {
+    MessageReceived: { signature: 'sss', names: ['user', 'color', 'text'] },
+    ChatCleared: { signature: '', names: [] }
+  }
 })
 
 let chatInterface: any = null
@@ -50,6 +54,10 @@ function sendToRenderer(channel: string, payload?: unknown): void {
   }
 }
 
+function notifyOverlayClear(): void {
+  if (chatInterface) chatInterface.ChatCleared()
+}
+
 function clearJoinTimeout(): void {
   if (joinTimeout) {
     clearTimeout(joinTimeout)
@@ -67,6 +75,10 @@ function teardownTwitchClient(): void {
 
 function connectToTwitch(channel: string): void {
   teardownTwitchClient()
+
+  // Empezamos una sesión nueva: pedimos al overlay que borre los
+  // mensajes anteriores y muestre de nuevo el placeholder.
+  notifyOverlayClear()
 
   twitchClient = new tmi.Client({ channels: [channel] })
 
@@ -163,12 +175,11 @@ app.whenReady().then(async () => {
   ipcMain.on('disconnect-twitch', () => {
     console.log('[StreamShell Backend] Desconectado por el usuario')
     teardownTwitchClient()
+    notifyOverlayClear()
   })
 
-  // 1) D-Bus primero para que bus_watch_name vea el nombre ya presente.
   await initDBus()
 
-  // 2) Corremos los checks de GNOME. Dev: symlink + schema + stale check.
   try {
     pendingGnomeStatus = await checkGnomeSetup(is.dev, REPO_EXTENSION_PATH)
     for (const w of pendingGnomeStatus.warnings) {
@@ -179,10 +190,8 @@ app.whenReady().then(async () => {
     pendingGnomeStatus = { warnings: [], errors: [], needsRelogin: false, isWayland: false }
   }
 
-  // 3) Habilitar la extensión (idempotente).
   await ensureGnomeExtensionEnabled()
 
-  // 4) Ventana al final.
   createWindow()
 
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
