@@ -36,13 +36,21 @@ const T = (key) => TRANSLATIONS[LOCALE][key] ?? TRANSLATIONS.en[key] ?? key;
 const WAITING_MARKUP = T('waiting');
 // ----------------------------------------------------------------------------
 
-const VARIANT = 'baseline';
 const BG_ALPHA = 0.35;
 
 const WIDTH = 340;
+const PADDING = 12;
+const ROW_WIDTH = WIDTH - PADDING * 2;
 const MARGIN = 16;
 const MAX_LINES = 10;
 const DEFAULT_COLOR = '#8A2BE2';
+
+const FONT_SIZE = 16;
+const BADGE_SIZE = 18;
+const EMOTE_SIZE = 24;
+// A single "word" longer than this (URLs, spam) is split so it can't
+// overflow the box.
+const MAX_WORD_LEN = 28;
 
 const BUS_NAME = 'org.streamshell.Twitch';
 const OBJECT_PATH = '/org/streamshell/Twitch/Chat';
@@ -50,9 +58,9 @@ const INTERFACE = 'org.streamshell.Twitch.Chat';
 
 export default class ChatOverlayTest extends Extension {
     enable() {
-        this._lines = [];
         this._box = null;
-        this._label = null;
+        this._label = null;      // "waiting" placeholder
+        this._linesBox = null;   // vertical container of message rows
         this._signalId = null;
         this._clearSignalId = null;
         this._nameWatchId = null;
@@ -70,6 +78,7 @@ export default class ChatOverlayTest extends Extension {
         });
 
         // Suscripción al signal D-Bus de mensajes.
+        // El tercer argumento ahora es un JSON: {"badges":[...],"segments":[...]}
         this._signalId = Gio.DBus.session.signal_subscribe(
             BUS_NAME,
             INTERFACE,
@@ -78,8 +87,8 @@ export default class ChatOverlayTest extends Extension {
             null,
             Gio.DBusSignalFlags.NONE,
             (_connection, _sender, _path, _iface, _signal, params) => {
-                const [user, color, text] = params.deepUnpack();
-                this._onMessageReceived(user, color, text);
+                const [user, color, payload] = params.deepUnpack();
+                this._onMessageReceived(user, color, payload);
             }
         );
 
@@ -96,8 +105,6 @@ export default class ChatOverlayTest extends Extension {
         );
 
         // Observar la presencia del backend Electron en el bus de sesión.
-        // Se dispara cuando el nombre aparece (Electron arranca) o
-        // desaparece (Electron cierra).
         this._nameWatchId = Gio.bus_watch_name(
             Gio.BusType.SESSION,
             BUS_NAME,
@@ -121,68 +128,45 @@ export default class ChatOverlayTest extends Extension {
 
     _onChatCleared() {
         console.log('[StreamShell] chat cleared');
-        this._lines = [];
-        if (this._label) {
-            this._label.get_clutter_text().set_markup(WAITING_MARKUP);
-        }
+        if (this._linesBox)
+            this._linesBox.destroy_all_children();
+        if (this._label)
+            this._label.show();
     }
 
     _buildBox() {
         const label = new St.Label({
-            style: 'color: white; font-size: 16px;',
+            style: `color: white; font-size: ${FONT_SIZE}px;`,
         });
         label.get_clutter_text().set_markup(WAITING_MARKUP);
 
-        let box;
-        if (VARIANT === 'split') {
-            box = new St.Widget({
-                layout_manager: new Clutter.BinLayout(),
-                reactive: false,
-                can_focus: false,
-                track_hover: false,
-                width: WIDTH,
-            });
-            const bg = new St.Widget({
-                style: 'background-color: black; border-radius: 12px;',
-                x_expand: true,
-                y_expand: true,
-                opacity: Math.round(BG_ALPHA * 255),
-            });
-            const content = new St.BoxLayout({
-                vertical: true,
-                style: 'padding: 12px;',
-                x_expand: true,
-                y_expand: true,
-            });
-            content.add_child(label);
-            box.add_child(bg);
-            box.add_child(content);
-        } else {
-            const radius = VARIANT === 'baseline' ? ' border-radius: 12px;' : '';
-            box = new St.BoxLayout({
-                vertical: true,
-                reactive: false,
-                can_focus: false,
-                track_hover: false,
-                width: WIDTH,
-                style: `background-color: rgba(0,0,0,${BG_ALPHA});${radius} padding: 12px;`,
-            });
-            box.add_child(label);
-        }
-        return { box, label };
+        const linesBox = new St.BoxLayout({
+            vertical: true,
+            reactive: false,
+            style: 'spacing: 4px;',
+        });
+
+        const box = new St.BoxLayout({
+            vertical: true,
+            reactive: false,
+            can_focus: false,
+            track_hover: false,
+            width: WIDTH,
+            style: `background-color: rgba(0,0,0,${BG_ALPHA}); border-radius: 12px; padding: ${PADDING}px;`,
+        });
+        box.add_child(label);
+        box.add_child(linesBox);
+
+        return {box, label, linesBox};
     }
 
     _showBox() {
         if (this._box) return;
 
-        const { box, label } = this._buildBox();
+        const {box, label, linesBox} = this._buildBox();
         this._box = box;
         this._label = label;
-
-        // Si ya había mensajes en buffer (raro, pero posible), repintarlos.
-        if (this._lines.length > 0) {
-            this._label.get_clutter_text().set_markup(this._lines.join('\n'));
-        }
+        this._linesBox = linesBox;
 
         Main.uiGroup.add_child(this._box);
 
@@ -199,21 +183,124 @@ export default class ChatOverlayTest extends Extension {
         this._box.destroy();
         this._box = null;
         this._label = null;
-        this._lines = [];
+        this._linesBox = null;
     }
 
-    _onMessageReceived(user, color, text) {
-        const safeUser = GLib.markup_escape_text(user, -1);
-        const safeText = GLib.markup_escape_text(text, -1);
+    // --- Rendering ----------------------------------------------------------
+
+    _makeIcon(path, size) {
+        // Only accept absolute PNG paths (they come from our own backend).
+        if (typeof path !== 'string' || !path.startsWith('/') || !path.endsWith('.png'))
+            return null;
+
+        return new St.Icon({
+            gicon: new Gio.FileIcon({file: Gio.File.new_for_path(path)}),
+            icon_size: size,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+    }
+
+    _makeWord(word, style) {
+        return new St.Label({
+            text: word,
+            style,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+    }
+
+    _parsePayload(payload) {
+        try {
+            const p = JSON.parse(payload);
+            return {
+                badges: Array.isArray(p.badges) ? p.badges : [],
+                segments: Array.isArray(p.segments) ? p.segments : [],
+            };
+        } catch (_e) {
+            // Backend antiguo: el tercer argumento era texto plano.
+            return {badges: [], segments: [{t: 'text', v: String(payload)}]};
+        }
+    }
+
+    _newRow(msg) {
+        const row = new St.BoxLayout({
+            vertical: false,
+            reactive: false,
+            style: 'spacing: 4px;',
+        });
+        msg.add_child(row);
+        return row;
+    }
+
+    // Clutter.FlowLayout is a column-aligned grid, not inline text flow, so
+    // wrapping is done by hand: add a child, measure the row, and if it no
+    // longer fits, move that child to a new row. `msg` must already be
+    // attached to the stage so widths are measured with the real theme.
+    _fillMessage(msg, user, color, payload) {
+        const {badges, segments} = this._parsePayload(payload);
         const safeColor = /^#[0-9A-Fa-f]{6}$/.test(color) ? color : DEFAULT_COLOR;
+        const textStyle = `color: white; font-size: ${FONT_SIZE}px;`;
 
-        const userMarkup = `<span color="${safeColor}"><b>${safeUser}</b></span>`;
+        let row = this._newRow(msg);
+        const add = (actor) => {
+            row.add_child(actor);
+            if (row.get_n_children() > 1 && row.get_preferred_width(-1)[1] > ROW_WIDTH) {
+                row.remove_child(actor);
+                row = this._newRow(msg);
+                row.add_child(actor);
+            }
+        };
 
-        this._lines.push(`${userMarkup}: ${safeText}`);
-        this._lines = this._lines.slice(-MAX_LINES);
+        for (const badgePath of badges) {
+            const icon = this._makeIcon(badgePath, BADGE_SIZE);
+            if (icon) add(icon);
+        }
 
-        if (!this._label) return;
-        this._label.get_clutter_text().set_markup(this._lines.join('\n'));
+        add(this._makeWord(
+            `${user}:`,
+            `color: ${safeColor}; font-weight: bold; font-size: ${FONT_SIZE}px;`
+        ));
+
+        for (const seg of segments) {
+            if (seg.t === 'emote') {
+                const icon = this._makeIcon(seg.path, EMOTE_SIZE);
+                // If the icon can't be built, fall back to the emote's name.
+                if (icon) add(icon);
+                else if (seg.name) add(this._makeWord(String(seg.name), textStyle));
+            } else if (seg.t === 'text' && typeof seg.v === 'string') {
+                for (const word of seg.v.split(/\s+/)) {
+                    if (!word) continue;
+                    for (let i = 0; i < word.length; i += MAX_WORD_LEN)
+                        add(this._makeWord(word.slice(i, i + MAX_WORD_LEN), textStyle));
+                }
+            }
+        }
+    }
+
+    _onMessageReceived(user, color, payload) {
+        if (!this._linesBox) return;
+
+        if (this._label) this._label.hide();
+
+        const msg = new St.BoxLayout({
+            vertical: true,
+            reactive: false,
+            width: ROW_WIDTH,
+            style: 'spacing: 2px;',
+        });
+        this._linesBox.add_child(msg);
+
+        try {
+            this._fillMessage(msg, user, color, payload);
+        } catch (e) {
+            console.error(`[StreamShell] failed to render message: ${e}`);
+            msg.destroy();
+            return;
+        }
+
+        // Keep only the last MAX_LINES messages.
+        const rows = this._linesBox.get_children();
+        for (let i = 0; i < rows.length - MAX_LINES; i++)
+            rows[i].destroy();
     }
 
     _reposition() {
