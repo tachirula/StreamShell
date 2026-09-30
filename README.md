@@ -1,14 +1,18 @@
-# StreamShell
+<h1 align="center">
+  <img src="./.github/assets/StreamShell.png" alt="StreamShell" width="600">
+</h1>
 
-![Electron](https://img.shields.io/badge/Electron-47848F?logo=electron&logoColor=white)
-![React](https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB)
-![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
-![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white)
-![GNOME Shell](https://img.shields.io/badge/GNOME_Shell-extension-4A86CF?logo=gnome&logoColor=white)
-![Twitch](https://img.shields.io/badge/Twitch-chat_overlay-9146FF?logo=twitch&logoColor=white)
-![Linux](https://img.shields.io/badge/Linux-Wayland_and_X11-FCC624?logo=linux&logoColor=black)
-![Docs as Code](https://img.shields.io/badge/Docs-Mermaid_diagrams-FF3670?logo=mermaid&logoColor=white)
-![Last commit](https://img.shields.io/github/last-commit/tachirula/StreamShell)
+<p align="center">
+  <img src="https://img.shields.io/badge/Electron-47848F?logo=electron&logoColor=white" alt="Electron">
+  <img src="https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB" alt="React">
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22">
+  <img src="https://img.shields.io/badge/GNOME_Shell-extension-4A86CF?logo=gnome&logoColor=white" alt="GNOME Shell">
+  <img src="https://img.shields.io/badge/Twitch-chat_overlay-9146FF?logo=twitch&logoColor=white" alt="Twitch">
+  <img src="https://img.shields.io/badge/Linux-Wayland_and_X11-FCC624?logo=linux&logoColor=black" alt="Linux">
+  <img src="https://img.shields.io/badge/Docs-Mermaid_diagrams-FF3670?logo=mermaid&logoColor=white" alt="Docs as Code">
+  <img src="https://img.shields.io/github/last-commit/tachirula/StreamShell" alt="Last commit">
+</p>
 
 StreamShell is a Twitch chat overlay for GNOME Shell, with an Electron control
 panel for connection and preferences. The Electron main process reads Twitch
