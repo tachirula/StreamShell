@@ -2,7 +2,7 @@ import './load-env'
 
 import { getStreamerAvatar, getUserInfo } from './twitch-api'
 import { preloadBadges, resolveBadges } from './twitch-badges'
-import { buildSegments } from './chat-segments'
+import { buildSegments, type Segment } from './chat-segments'
 
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
@@ -133,15 +133,23 @@ function connectToTwitch(channel: string): void {
     const color = String(tags.color || '#8A2BE2')
     const text = String(message)
 
-    messageChain = messageChain.then(async () => {
-      const [badges, segments] = await Promise.all([
-        resolveBadges(tags.badges, broadcasterId),
-        buildSegments(text, tags.emotes)
-      ])
-      if (chatInterface) {
-        chatInterface.MessageReceived(user, color, JSON.stringify({ badges, segments }))
-      }
-    })
+    messageChain = messageChain
+      .then(async () => {
+        let badges: string[] = []
+        let segments: Segment[] = [{ t: 'text', v: text }]
+        try {
+          ;[badges, segments] = await Promise.all([
+            resolveBadges(tags.badges, broadcasterId),
+            buildSegments(text, tags.emotes)
+          ])
+        } catch (err) {
+          console.warn('[StreamShell Backend] could not resolve message assets:', err)
+        }
+        if (chatInterface) {
+          chatInterface.MessageReceived(user, color, JSON.stringify({ badges, segments }))
+        }
+      })
+      .catch((err) => console.error('[StreamShell Backend] message pipeline failed:', err))
   })
 
   twitchClient.connect().catch((err: Error) => {
