@@ -50,8 +50,11 @@ export class EmoteAnimator {
 
         try {
             let entry = this._entries.get(path);
-            if (!entry && this._enabled && this._entries.size < this._maxAnimated)
+            if (!entry && this._enabled) {
+                if (this._entries.size >= this._maxAnimated)
+                    this._evictOldestEntry();
                 entry = this._createEntry(path);
+            }
 
             if (entry)
                 return this._animatedActor(entry, size);
@@ -84,7 +87,20 @@ export class EmoteAnimator {
     }
 
     setPaused(paused) {
+        if (this._paused === paused) return;
         this._paused = paused;
+
+        if (!paused && this._enabled) {
+            for (const entry of this._entries.values()) {
+                try {
+                    entry.iter = entry.anim.get_iter(null);
+                    this._upload(entry, entry.iter.get_pixbuf());
+                } catch (e) {
+                    this._warnOnce(`could not resume ${entry.path}: ${e}`);
+                }
+            }
+        }
+
         this._updateTimer();
     }
 
@@ -173,6 +189,21 @@ export class EmoteAnimator {
         actor.connect('destroy', () => this._release(entry, actor));
         this._updateTimer();
         return actor;
+    }
+
+    _evictOldestEntry() {
+        const oldest = this._entries.values().next().value;
+        if (!oldest) return;
+
+        try {
+            oldest.iter = oldest.anim.get_iter(null);
+            this._upload(oldest, oldest.iter.get_pixbuf());
+        } catch (e) {
+            this._warnOnce(`could not freeze ${oldest.path} before eviction: ${e}`);
+        }
+
+        this._entries.delete(oldest.path);
+        this._updateTimer();
     }
 
     _release(entry, actor) {
