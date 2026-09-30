@@ -2,15 +2,65 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+
 const tmi = require('tmi.js')
+const dbus = require('dbus-next')
+
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('no-sandbox')
+}
+
+class StreamShellInterface extends dbus.interface.Interface {
+  constructor(name: string) { super(name) }
+  MessageReceived(user: string, color: string, text: string) { return [user, color, text] }
+}
+
+StreamShellInterface.configureMembers({
+  signals: { MessageReceived: { signature: 'sss', names: ['user', 'color', 'text'] } }
+})
+
+let chatInterface: any = null
+let twitchClient: any = null
+
+async function initDBus() {
+  try {
+    const bus = dbus.sessionBus()
+    await bus.requestName('org.streamshell.Twitch')
+    chatInterface = new StreamShellInterface('org.streamshell.Twitch.Chat')
+    bus.export('/org/streamshell/Twitch/Chat', chatInterface)
+  } catch (err) {
+    console.error('[StreamShell Backend] Error D-Bus:', err)
+  }
+}
+
+function connectToTwitch(channel: string): void {
+  if (twitchClient) {
+    twitchClient.disconnect().catch(console.error)
+  }
+  twitchClient = new tmi.Client({ channels: [channel] })
+
+  twitchClient.on('connected', (addr, port) => {
+    console.log(`[StreamShell Backend] Conectado exitosamente a: ${channel} (${addr}:${port})`)
+  })
+
+  twitchClient.connect().catch(console.error)
+
+  twitchClient.on('message', (_channel, tags, message, self) => {
+    if (self) return
+    const user = String(tags['display-name'] || tags.username || 'unknown')
+    const color = String(tags.color || '#8A2BE2')
+    const text = String(message)
+    if (chatInterface) chatInterface.MessageReceived(user, color, text)
+  })
+}
 
 function createWindow(): void {
-  // Create the browser window.
   const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    width: 600,
+    height: 750,
     show: false,
     autoHideMenuBar: true,
+    backgroundColor: '#18181b',   // 👈 ESTA LÍNEA elimina la franja blanca
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -18,17 +68,16 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
-  })
+  // Refuerzo: por si el SO pinta algo antes del primer frame
+  mainWindow.setBackgroundColor('#18181b')
+
+  mainWindow.on('ready-to-show', () => mainWindow.show())
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
 
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -36,63 +85,23 @@ function createWindow(): void {
   }
 }
 
-function startTwitchEngine(): void {
-  const client = new tmi.Client({
-    channels: ['juansguarnizo']
-  })
-
-  client.on('connected', (addr, port) => console.log(`[StreamShell Backend] Connected to ${addr}:${port}`))
-  client.on('disconnected', (reason) => console.log(`[StreamShell Backend] Disconnected: ${reason}`))
-
-  client.connect().catch(console.error)
-
-  client.on('message', (_channel, tags, message, self) => {
-    if (self) return
-
-    const user = tags['display-name'] || tags.username
-    const color = tags.color || '#8A2BE2'
-
-    console.log(`[StreamShell Backend] ${user} (${color}): ${message}`)
-
-    // TODO: Dispatch the event over D-Bus to GNOME Shell.
-  })
-}
-
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
-  // Set app user model id for windows
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.electron')
+  app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
-  app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+  ipcMain.on('set-twitch-channel', (event, channel) => connectToTwitch(channel))
+
+  ipcMain.on('disconnect-twitch', () => {
+    if (twitchClient) {
+      twitchClient.disconnect().catch(console.error)
+      twitchClient = null
+      console.log('[StreamShell Backend] Desconectado por el usuario')
+    }
   })
 
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
-
+  await initDBus()
   createWindow()
-  startTwitchEngine()
-
-  app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
-
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
