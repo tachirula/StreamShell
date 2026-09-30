@@ -5,7 +5,7 @@ const api = {
   setChannel: (channel: string) => ipcRenderer.send('set-twitch-channel', channel),
   disconnectChannel: () => ipcRenderer.send('disconnect-twitch'),
 
-  onTwitchConnected: (cb: (data: { channel: string; addr: string; port: number }) => void) => {
+  onTwitchConnected: (cb: (data: { channel: string }) => void) => {
     const listener = (_e: unknown, data: any) => cb(data)
     ipcRenderer.on('twitch:connected', listener)
     return () => ipcRenderer.removeListener('twitch:connected', listener)
@@ -19,6 +19,17 @@ const api = {
     const listener = (_e: unknown, data: any) => cb(data)
     ipcRenderer.on('twitch:disconnected', listener)
     return () => ipcRenderer.removeListener('twitch:disconnected', listener)
+  },
+
+  onGnomeStatus: (cb: (data: {
+    warnings: string[]
+    errors: string[]
+    needsRelogin: boolean
+    isWayland: boolean
+  }) => void) => {
+    const listener = (_e: unknown, data: any) => cb(data)
+    ipcRenderer.on('gnome:status', listener)
+    return () => ipcRenderer.removeListener('gnome:status', listener)
   }
 }
 
