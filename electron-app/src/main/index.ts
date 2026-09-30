@@ -73,6 +73,7 @@ const chatHistory: {
   text: string
   badges: string[]
   emotes: Record<string, string[]> | null
+  reply: ChatReply | null
 }[] = []
 const MAX_STORED_HISTORY = 500
 
@@ -93,6 +94,49 @@ function sendToRenderer(channel: string, payload?: unknown): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
   }
+}
+
+function getStringRecord(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const result: Record<string, string> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item !== 'string') return null
+    result[key] = item
+  }
+  return result
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function getEmotePositions(value: unknown): Record<string, string[]> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const result: Record<string, string[]> = {}
+  for (const [id, positions] of Object.entries(value)) {
+    if (!isStringArray(positions)) return null
+    result[id] = [...positions]
+  }
+  return result
+}
+
+function getChatReply(tags: Record<string, unknown>, message: string): ChatReply | null {
+  const mention = message.match(/^@([a-zA-Z0-9_]+)(?:\s|$)/)?.[1]
+  const replyUserLogin =
+    typeof tags['reply-parent-user-login'] === 'string' ? tags['reply-parent-user-login'] : ''
+  const replyDisplayName =
+    typeof tags['reply-parent-display-name'] === 'string' ? tags['reply-parent-display-name'] : ''
+  const replyMessage =
+    typeof tags['reply-parent-msg-body'] === 'string' ? tags['reply-parent-msg-body'] : ''
+  const hasReplyTags =
+    typeof tags['reply-parent-msg-id'] === 'string' ||
+    replyUserLogin.length > 0 ||
+    replyDisplayName.length > 0 ||
+    replyMessage.length > 0
+  if (!mention && !hasReplyTags) return null
+
+  const user = mention || replyUserLogin || replyDisplayName
+  return user ? { user, message: replyMessage } : null
 }
 
 function notifyOverlayClear(): void {

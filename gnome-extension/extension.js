@@ -15,10 +15,12 @@ const TRANSLATIONS = {
     en: {
         waiting: '<b>Waiting for Twitch connection...</b>',
         latest: '↓ Jump to latest',
+        replyTo: 'Reply to',
     },
     es: {
         waiting: '<b>Esperando conexión a Twitch...</b>',
         latest: '↓ Ir a los nuevos',
+        replyTo: 'Respuesta a',
     },
 };
 
@@ -530,11 +532,46 @@ export default class ChatOverlayTest extends Extension {
             return {
                 badges: Array.isArray(p.badges) ? p.badges : [],
                 segments: Array.isArray(p.segments) ? p.segments : [],
+                reply: p.reply && typeof p.reply.user === 'string'
+                    ? {
+                        user: p.reply.user,
+                        message: typeof p.reply.message === 'string' ? p.reply.message : '',
+                    }
+                    : null,
             };
         } catch (_e) {
             // Backend antiguo: el tercer argumento era texto plano.
-            return {badges: [], segments: [{t: 'text', v: String(payload)}]};
+            return {badges: [], segments: [{t: 'text', v: String(payload)}], reply: null};
         }
+    }
+
+    _addReplyHeader(msg, reply) {
+        const replyRow = new St.BoxLayout({
+            vertical: false,
+            reactive: false,
+            style: 'spacing: 4px;',
+        });
+        const iconFile = this.dir.get_child('reply.svg');
+        replyRow.add_child(new St.Icon({
+            gicon: new Gio.FileIcon({file: iconFile}),
+            icon_size: 16,
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'color: rgba(255,255,255,0.75);',
+        }));
+
+        const quotedMessage = reply.message.replace(/\s+/g, ' ').trim();
+        const quote = quotedMessage.length > 96
+            ? `${quotedMessage.slice(0, 95)}…`
+            : quotedMessage;
+        const text = `${T('replyTo')} @${reply.user}${quote ? `: ${quote}` : ''}`;
+        const label = this._makeWord(
+            text,
+            `color: rgba(255,255,255,0.75); font-size: 13px;`
+        );
+        label.width = this._chatWidth - PADDING * 2 - 20;
+        label.get_clutter_text().set_line_wrap(true);
+        replyRow.add_child(label);
+        msg.add_child(replyRow);
     }
 
     _newRow(msg) {
@@ -552,9 +589,12 @@ export default class ChatOverlayTest extends Extension {
     // longer fits, move that child to a new row. `msg` must already be
     // attached to the stage so widths are measured with the real theme.
     _fillMessage(msg, user, color, payload) {
-        const {badges, segments} = this._parsePayload(payload);
+        const {badges, segments, reply} = this._parsePayload(payload);
         const safeColor = /^#[0-9A-Fa-f]{6}$/.test(color) ? color : DEFAULT_COLOR;
         const textStyle = `color: white; font-size: ${FONT_SIZE}px;`;
+
+        if (reply)
+            this._addReplyHeader(msg, reply);
 
         let row = this._newRow(msg);
         const add = (actor) => {
@@ -594,13 +634,16 @@ export default class ChatOverlayTest extends Extension {
     }
 
     _addFallbackLine(user, payload) {
-        const {segments} = this._parsePayload(payload);
+        const {segments, reply} = this._parsePayload(payload);
         const text = segments
             .map(s => (s.t === 'emote' ? (s.name ?? '') : (s.v ?? '')))
             .join('')
             .trim();
+        const replyText = reply
+            ? `${T('replyTo')} @${reply.user}${reply.message ? `: ${reply.message}` : ''}\n`
+            : '';
         const label = new St.Label({
-            text: `${user}: ${text}`,
+            text: `${replyText}${user}: ${text}`,
             style: `color: white; font-size: ${FONT_SIZE}px;`,
             width: this._chatWidth - PADDING * 2,
         });

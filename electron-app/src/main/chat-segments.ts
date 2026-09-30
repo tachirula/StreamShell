@@ -12,11 +12,17 @@ import { getThirdPartyEmote, getThirdPartyEmoteNames } from './third-party-emote
 // why the message is split with Array.from() instead of using substring():
 // a single emoji counts as 1 for Twitch but 2 for JavaScript's .length.
 
-export type Segment = { t: 'text'; v: string } | { t: 'emote'; path: string; name: string }
+export type Segment =
+  { t: 'text'; v: string } | { t: 'emote'; path: string; name: string; animated?: boolean }
 
 export interface ChatPayload {
   badges: string[]
   segments: Segment[]
+}
+
+export interface ChatReply {
+  user: string
+  message: string
 }
 
 interface EmoteRange {
