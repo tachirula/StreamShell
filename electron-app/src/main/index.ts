@@ -22,6 +22,7 @@ StreamShellInterface.configureMembers({
 let chatInterface: any = null
 let twitchClient: any = null
 let mainWindow: BrowserWindow | null = null
+let joinTimeout: NodeJS.Timeout | null = null
 
 async function initDBus() {
   try {
@@ -40,20 +41,59 @@ function sendToRenderer(channel: string, payload?: unknown): void {
   }
 }
 
-function connectToTwitch(channel: string): void {
+function clearJoinTimeout(): void {
+  if (joinTimeout) {
+    clearTimeout(joinTimeout)
+    joinTimeout = null
+  }
+}
+
+function teardownTwitchClient(): void {
+  clearJoinTimeout()
   if (twitchClient) {
     twitchClient.disconnect().catch(console.error)
     twitchClient = null
   }
+}
+
+function connectToTwitch(channel: string): void {
+  teardownTwitchClient()
 
   twitchClient = new tmi.Client({ channels: [channel] })
 
+  // El WebSocket se abrió, pero Twitch todavía no confirmó el JOIN.
+  // No emitimos 'twitch:connected' todavía: puede fallar el JOIN.
   twitchClient.on('connected', (addr: string, port: number) => {
-    console.log(`[StreamShell Backend] Conectado exitosamente a: ${channel} (${addr}:${port})`)
-    sendToRenderer('twitch:connected', { channel, addr, port })
+    console.log(`[StreamShell Backend] WebSocket abierto con ${addr}:${port}, esperando JOIN...`)
+    clearJoinTimeout()
+    joinTimeout = setTimeout(() => {
+      console.warn('[StreamShell Backend] JOIN timeout')
+      sendToRenderer('twitch:error', {
+        message: `No se pudo entrar al canal "${channel}" (timeout)`
+      })
+      teardownTwitchClient()
+    }, 8000)
+  })
+
+  // Este es el evento que confirma que estamos DENTRO del canal.
+  twitchClient.on('join', (_ch: string, _user: string, self: boolean) => {
+    if (!self) return
+    clearJoinTimeout()
+    console.log(`[StreamShell Backend] JOIN confirmado en: ${channel}`)
+    sendToRenderer('twitch:connected', { channel })
+  })
+
+  // Twitch manda NOTICEs con msg-id cuando algo va mal (canal inexistente,
+  // suspendido, rate limit, etc.). Los propagamos como error.
+  twitchClient.on('notice', (_ch: string, msgid: string, message: string) => {
+    console.warn(`[StreamShell Backend] notice ${msgid}: ${message}`)
+    clearJoinTimeout()
+    sendToRenderer('twitch:error', { message })
+    teardownTwitchClient()
   })
 
   twitchClient.on('disconnected', (reason: string) => {
+    clearJoinTimeout()
     console.log(`[StreamShell Backend] Desconectado: ${reason}`)
     sendToRenderer('twitch:disconnected', { reason })
   })
@@ -67,8 +107,10 @@ function connectToTwitch(channel: string): void {
   })
 
   twitchClient.connect().catch((err: Error) => {
+    clearJoinTimeout()
     console.error('[StreamShell Backend] Error de conexión:', err)
     sendToRenderer('twitch:error', { message: err?.message ?? String(err) })
+    teardownTwitchClient()
   })
 }
 
@@ -109,11 +151,8 @@ app.whenReady().then(async () => {
   ipcMain.on('set-twitch-channel', (_event, channel: string) => connectToTwitch(channel))
 
   ipcMain.on('disconnect-twitch', () => {
-    if (twitchClient) {
-      twitchClient.disconnect().catch(console.error)
-      twitchClient = null
-      console.log('[StreamShell Backend] Desconectado por el usuario')
-    }
+    console.log('[StreamShell Backend] Desconectado por el usuario')
+    teardownTwitchClient()
   })
 
   await initDBus()
