@@ -1,4 +1,3 @@
-````markdown
 # Runtime roles and message data model
 
 The earlier diagram implied an inheritance hierarchy and a D-Bus proxy class
@@ -128,4 +127,4 @@ metadata. The class view uses the implementation's conceptual contract fields;
 it does not imply a separate runtime `MessageEnvelope` class. Do not treat the
 JSON as a generic Pango markup string: the extension creates actors from
 validated local paths and text values.
-````
+
