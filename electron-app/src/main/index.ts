@@ -1,3 +1,5 @@
+import './load-env'
+
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -8,6 +10,7 @@ import {
   resolveRepoExtensionPath,
   type GnomeCheckResult
 } from './gnome-setup'
+import { getStreamerAvatar } from './twitch-api'
 
 const tmi = require('tmi.js')
 const dbus = require('dbus-next')
@@ -176,6 +179,10 @@ app.whenReady().then(async () => {
     console.log('[StreamShell Backend] Desconectado por el usuario')
     teardownTwitchClient()
     notifyOverlayClear()
+  })
+
+  ipcMain.handle('get-streamer-avatar', async (_event, channel: string) => {
+    return await getStreamerAvatar(channel)
   })
 
   await initDBus()
