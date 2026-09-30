@@ -5,7 +5,6 @@ import Gio from 'gi://Gio';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-// Variantes de prueba del fondo: 'baseline' | 'no-radius' | 'split'
 const VARIANT = 'baseline';
 const BG_ALPHA = 0.35;
 
@@ -29,7 +28,6 @@ export default class ChatOverlayTest extends Extension {
         this._label.get_clutter_text().set_markup(WAITING_MARKUP);
 
         if (VARIANT === 'split') {
-            // Fondo como actor aparte: negro sólido con opacidad del actor, texto encima.
             this._box = new St.Widget({
                 layout_manager: new Clutter.BinLayout(),
                 reactive: false,
@@ -71,6 +69,15 @@ export default class ChatOverlayTest extends Extension {
         this._startupId = Main.layoutManager.connect('startup-complete', () => this._reposition());
         this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._reposition());
 
+        // --- SOLUCIÓN DEFINITIVA BUG SUPER/WINDOWS ---
+        this._overviewShowingId = Main.overview.connect('showing', () => {
+            if (this._box) this._box.hide();
+        });
+        this._overviewHidingId = Main.overview.connect('hiding', () => {
+            if (this._box) this._box.show();
+        });
+        // ----------------------------------------------
+
         this._signalId = Gio.DBus.session.signal_subscribe(
             BUS_NAME,
             INTERFACE,
@@ -110,6 +117,10 @@ export default class ChatOverlayTest extends Extension {
     }
 
     disable() {
+        if (this._overviewShowingId) Main.overview.disconnect(this._overviewShowingId);
+        if (this._overviewHidingId) Main.overview.disconnect(this._overviewHidingId);
+        this._overviewShowingId = this._overviewHidingId = null;
+
         if (this._signalId)
             Gio.DBus.session.signal_unsubscribe(this._signalId);
         this._signalId = null;
