@@ -119,3 +119,44 @@ Wayland does not support hot-reloading GNOME Shell extensions. Editing `extensio
   - Added a second D-Bus signal, `ChatCleared` (no arguments), to `StreamShellInterface`.
   - The main emits it in two places: at the top of `connectToTwitch()` (so connecting to a new channel starts clean) and in the `disconnect-twitch` IPC handler (after teardown).
   - The extension subscribes to `ChatCleared` and, on receipt, resets `this._lines` and re-renders the `WAITING_MARKUP` in the label. The box stays visible — only its contents are cleared.
+
+## 7. Internationalization (i18n)
+
+### 7.1 Scope
+Two independent processes render text that the user sees, and each detects the locale through a different mechanism:
+
+| Layer | Locale source | Fallback |
+|---|---|---|
+| Renderer (React panel) | `navigator.language` (Chromium reads it from the OS) | `en` |
+| GNOME extension (overlay) | `GLib.get_language_names()` (locale of the running GNOME Shell) | `en` |
+
+There is no shared translation catalog between the two. This is deliberate: they don't share a process, and a runtime bridge would add complexity for zero benefit when there are fewer than a dozen strings on each side.
+
+### 7.2 Renderer — `src/renderer/src/i18n.ts`
+- Minimal module, no dependency on `i18next` or similar. ~70 lines total.
+- Exports `t(key, params?)` and `getLocale()`.
+- Keys are flat strings (`panel.connect`, `gnome.warn.repoNotFound`, ...). Interpolation uses `{name}` placeholders.
+- Resolution order: current locale → `en` → raw key (so typos are visible without crashing the UI).
+- Adding a language is: extend `Locale`, extend `dictionaries`. Two edits.
+
+### 7.3 Main — warning keys instead of strings
+- `gnome-setup.ts` used to produce human-readable Spanish strings, which leaked user-facing text into the main process and made it impossible to translate.
+- Changed `GnomeCheckResult.warnings` from `string[]` to `GnomeWarning[]`:
+```ts
+  interface GnomeWarning { key: GnomeWarningKey; params?: Record<string, string> }
+```
+- The main process only knows the key (`'repoNotFound'`, `'staleWayland'`, ...) and the params (`{ path, expected, actual, message, schemaDir }`).
+- The renderer translates: `t('gnome.warn.' + w.key, w.params)`. Adding a new warning means adding one key + one dictionary entry per language, and the main process stays untouched.
+
+### 7.4 Extension — minimal inline dictionary
+- The waiting placeholder is the only user-visible string in the extension.
+- Translated with a small `TRANSLATIONS` object + `GLib.get_language_names()` iteration. Falls back to `en` if the system locale isn't in the dictionary.
+- **Long-term path**: once we package as `.deb`, replace the inline dictionary with gettext (`locale/<lang>/LC_MESSAGES/<uuid>.mo`). The rest of the code doesn't change — only `T()` becomes a gettext wrapper. This is why the extension-side solution is intentionally a stopgap.
+
+### 7.5 What this does *not* translate
+- Console logs (`[StreamShell Backend] WebSocket abierto con ...`). These are developer-facing and staying in one language avoids confusion when grepping across sessions.
+- Twitch chat messages. Obviously.
+- Error payloads coming back from Twitch (`No response from Twitch.`) — those are surfaced verbatim. Translating external error messages is a losing game.
+
+### 7.6 Wayland note
+The renderer respects `LANG=...` at launch (`LANG=es_ES.UTF-8 npm run dev`), because Chromium reads the locale from the environment. The extension does **not**: it reads the locale that GNOME Shell had when it started, which is fixed per session. Testing the extension in a different language requires a system-level language change and a full logout/login. This is expected behavior, not a bug.
