@@ -5,6 +5,14 @@ const api = {
   setChannel: (channel: string) => ipcRenderer.send('set-twitch-channel', channel),
   disconnectChannel: () => ipcRenderer.send('disconnect-twitch'),
   getStreamerAvatar: (channel: string) => ipcRenderer.invoke('get-streamer-avatar', channel),
+  getPreferences: () => ipcRenderer.invoke('preferences:get'),
+  setPreferences: (preferences: {
+    chatWidth: number
+    maxVisibleMessages: number
+    historyEnabled: boolean
+    historyLimit: number
+  }) => ipcRenderer.invoke('preferences:set', preferences),
+  clearCache: () => ipcRenderer.invoke('cache:clear'),
 
   onTwitchConnected: (cb: (data: { channel: string }) => void) => {
     const listener = (_e: unknown, data: any) => cb(data)
@@ -22,12 +30,14 @@ const api = {
     return () => ipcRenderer.removeListener('twitch:disconnected', listener)
   },
 
-  onGnomeStatus: (cb: (data: {
-    warnings: { key: string; params?: Record<string, string> }[]
-    errors: string[]
-    needsRelogin: boolean
-    isWayland: boolean
-  }) => void) => {
+  onGnomeStatus: (
+    cb: (data: {
+      warnings: { key: string; params?: Record<string, string> }[]
+      errors: string[]
+      needsRelogin: boolean
+      isWayland: boolean
+    }) => void
+  ) => {
     const listener = (_e: unknown, data: any) => cb(data)
     ipcRenderer.on('gnome:status', listener)
     return () => ipcRenderer.removeListener('gnome:status', listener)
@@ -42,6 +52,5 @@ if (process.contextIsolated) {
     console.error(error)
   }
 } else {
-  // @ts-ignore (define in dts)
-  window.electron = electronAPI; window.api = api
+  Object.assign(window, { electron: electronAPI, api })
 }

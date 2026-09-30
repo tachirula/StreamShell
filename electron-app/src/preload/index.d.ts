@@ -20,6 +20,13 @@ export interface GnomeStatus {
   isWayland: boolean
 }
 
+export interface AppPreferences {
+  chatWidth: number
+  maxVisibleMessages: number
+  historyEnabled: boolean
+  historyLimit: number
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -27,6 +34,9 @@ declare global {
       setChannel: (channel: string) => void
       disconnectChannel: () => void
       getStreamerAvatar: (channel: string) => Promise<string | null>
+      getPreferences: () => Promise<AppPreferences>
+      setPreferences: (preferences: AppPreferences) => Promise<AppPreferences>
+      clearCache: () => Promise<boolean>
       onTwitchConnected: (cb: (data: { channel: string }) => void) => () => void
       onTwitchError: (cb: (data: { message: string }) => void) => () => void
       onTwitchDisconnected: (cb: (data: { reason: string }) => void) => () => void
