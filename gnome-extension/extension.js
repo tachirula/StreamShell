@@ -5,13 +5,43 @@ import Gio from 'gi://Gio';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
+// --- i18n (minimal, extension-side) -----------------------------------------
+// GNOME extensions traditionally use gettext with .po/.mo files under
+// locale/<lang>/LC_MESSAGES/<uuid>.mo. That's the right long-term path once
+// we package as .deb, but for now a tiny dictionary keeps things self-
+// contained and avoids pulling in the gettext toolchain during dev.
+
+const TRANSLATIONS = {
+    en: {
+        waiting: '<b>Waiting for Twitch connection...</b>',
+    },
+    es: {
+        waiting: '<b>Esperando conexión a Twitch...</b>',
+    },
+};
+
+function detectLocale() {
+    // GLib returns e.g. ['es_AR.UTF-8', 'es_AR', 'es', 'en_US.UTF-8', 'C']
+    const names = GLib.get_language_names();
+    for (const name of names) {
+        const short = name.split(/[._]/)[0].toLowerCase();
+        if (TRANSLATIONS[short]) return short;
+    }
+    return 'en';
+}
+
+const LOCALE = detectLocale();
+const T = (key) => TRANSLATIONS[LOCALE][key] ?? TRANSLATIONS.en[key] ?? key;
+
+const WAITING_MARKUP = T('waiting');
+// ----------------------------------------------------------------------------
+
 const VARIANT = 'baseline';
 const BG_ALPHA = 0.35;
 
 const WIDTH = 340;
 const MARGIN = 16;
 const MAX_LINES = 10;
-const WAITING_MARKUP = '<b>Esperando conexión a Twitch...</b>';
 const DEFAULT_COLOR = '#8A2BE2';
 
 const BUS_NAME = 'org.streamshell.Twitch';
