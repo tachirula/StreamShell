@@ -490,21 +490,21 @@ export default class ChatOverlayTest extends Extension {
 
     // --- Rendering ----------------------------------------------------------
 
-    _makeIcon(path, size) {
+    _makeIcon(path, size, animate = true) {
         try {
-            return this._makeIconUnsafe(path, size);
+            return this._makeIconUnsafe(path, size, animate);
         } catch (e) {
             console.warn(`[StreamShell] icon failed for ${path}: ${e}\n${e.stack}`);
             return null;
         }
     }
 
-    _makeIconUnsafe(path, size) {
-        // Only accept absolute PNG/GIF paths (they come from our own backend).
-        if (typeof path !== 'string' || !path.startsWith('/') || !/\.(png|gif)$/.test(path))
+    _makeIconUnsafe(path, size, animate) {
+        // Only accept absolute image paths (they come from our own backend).
+        if (typeof path !== 'string' || !path.startsWith('/') || !/\.(png|gif|webp)$/.test(path))
             return null;
 
-        if (path.endsWith('.gif') && this._animator) {
+        if (animate && /\.(gif|webp)$/.test(path) && this._animator) {
             const animated = this._animator.makeActor(path, size);
             if (animated) return animated;
         }

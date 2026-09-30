@@ -41,7 +41,7 @@ export class EmoteAnimator {
     // --- Public API ---------------------------------------------------------
 
     /**
-     * Builds an actor of height `size` showing the emote at `path` (a .gif).
+     * Builds an actor of height `size` showing the emote at `path` (a .gif or .webp).
      * Animated when possible, otherwise a still frame. Returns null on failure
      * (the caller should fall back to a plain icon).
      */

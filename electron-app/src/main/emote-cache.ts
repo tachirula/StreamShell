@@ -14,13 +14,14 @@ import { MAX_CONCURRENT_IMAGE_DOWNLOADS } from '../shared/settings-constraints'
 // The cache key is a hash of the URL. Twitch image URLs are immutable
 // (a changed badge/emote gets a new URL or id), so no invalidation is needed.
 //
-// The file extension is chosen from the real content (GIF magic bytes), so
-// the extension can tell animated files (.gif) from static ones (.png).
+// The file extension is chosen from the content header so the extension can
+// distinguish GIF, WebP, and PNG images.
 
-const DOWNLOAD_TIMEOUT_MS = 4000
+const DOWNLOAD_IDLE_TIMEOUT_MS = 30000
+const DEFAULT_MAX_CONCURRENT_DOWNLOADS = MAX_CONCURRENT_IMAGE_DOWNLOADS
 
-type Ext = 'png' | 'gif'
-const EXTENSIONS: Ext[] = ['gif', 'png']
+type Ext = 'png' | 'gif' | 'webp'
+const EXTENSIONS: Ext[] = ['gif', 'png', 'webp']
 
 type FetchResult = { ok: true; path: string } | { ok: false; missing: boolean } // missing = HTTP 404
 
@@ -278,5 +279,3 @@ export function cacheEmote(id: string, format: EmoteFormat = 'animated'): Promis
   emoteInflight.set(id, job)
   return job
 }
-
-// TODO (step 4): third-party emotes (BTTV / 7TV / FFZ) as a Map<name, url>

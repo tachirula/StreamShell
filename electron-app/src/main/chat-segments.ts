@@ -1,4 +1,5 @@
-import { cacheEmote } from './emote-cache'
+import { cacheEmote, cacheImage } from './emote-cache'
+import { getThirdPartyEmote, getThirdPartyEmoteNames } from './third-party-emotes'
 
 // Splits a chat message into text and emote segments using the `emotes` tag
 // that Twitch attaches to every IRC message. No dictionary needed: the tag
@@ -53,6 +54,80 @@ function pushText(segments: Segment[], value: string): void {
   else segments.push({ t: 'text', v: value })
 }
 
+export function stripReplyMention(segments: Segment[], replyUser: string): Segment[] {
+  const first = segments[0]
+  if (!first || first.t !== 'text') return segments
+
+  const mention = new RegExp(`^@${replyUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+`, 'i')
+  const match = first.v.match(mention)
+  if (!match) return segments
+
+  const result: Segment[] = []
+  pushText(result, first.v.slice(match[0].length))
+  for (const segment of segments.slice(1)) {
+    if (segment.t === 'text') pushText(result, segment.v)
+    else result.push(segment)
+  }
+  return result
+}
+
+function isWordCharacter(value: string | undefined): boolean {
+  return value !== undefined && /[\p{L}\p{N}_]/u.test(value)
+}
+
+let thirdPartyCodesByInitial = new Map<string, string[]>()
+let knownThirdPartyCodes = new Set<string>()
+
+function refreshThirdPartyCodes(): void {
+  const codes = getThirdPartyEmoteNames()
+  if (
+    codes.length === knownThirdPartyCodes.size &&
+    codes.every((code) => knownThirdPartyCodes.has(code))
+  ) {
+    return
+  }
+
+  thirdPartyCodesByInitial = new Map()
+  for (const code of codes.sort((a, b) => b.length - a.length)) {
+    const initial = Array.from(code)[0]
+    if (!initial) continue
+    const matches = thirdPartyCodesByInitial.get(initial) ?? []
+    matches.push(code)
+    thirdPartyCodesByInitial.set(initial, matches)
+  }
+  knownThirdPartyCodes = new Set(codes)
+}
+
+function splitThirdPartyEmotes(
+  text: string
+): Array<{ text: string; code?: string; urls?: string[] }> {
+  const parts: Array<{ text: string; code?: string; urls?: string[] }> = []
+  let textStart = 0
+  let cursor = 0
+  while (cursor < text.length) {
+    const initial = String.fromCodePoint(text.codePointAt(cursor)!)
+    const candidates = thirdPartyCodesByInitial.get(initial)
+    const match = candidates?.find((code) => {
+      if (!text.startsWith(code, cursor)) return false
+      const before = cursor > 0 ? [...text.slice(0, cursor)].at(-1) : undefined
+      const end = cursor + code.length
+      const after = end < text.length ? String.fromCodePoint(text.codePointAt(end)!) : undefined
+      return !isWordCharacter(before) && !isWordCharacter(after)
+    })
+    if (!match) {
+      cursor += initial.length
+      continue
+    }
+
+    if (cursor > textStart) parts.push({ text: text.slice(textStart, cursor) })
+    parts.push({ text: '', code: match, urls: getThirdPartyEmote(match) })
+    cursor += match.length
+    textStart = cursor
+  }
+  if (textStart < text.length) parts.push({ text: text.slice(textStart) })
+  return parts
+}
+
 /**
  * @param message    Message text as delivered by tmi.js
  * @param emotesTag  `tags.emotes` from tmi.js (or null when there are none)
@@ -76,23 +151,53 @@ export async function buildSegments(
     })
   )
 
-  const segments: Segment[] = []
+  const twitchSegments: Segment[] = []
   let cursor = 0
 
   for (const r of ranges) {
     if (r.start < cursor) continue // overlapping range: skip
 
-    pushText(segments, chars.slice(cursor, r.start).join(''))
+    pushText(twitchSegments, chars.slice(cursor, r.start).join(''))
 
     const name = chars.slice(r.start, r.end + 1).join('')
     const path = paths.get(r.id)
 
-    if (path) segments.push({ t: 'emote', path, name })
-    else pushText(segments, name) // download failed: show the emote's name
+    if (path) twitchSegments.push({ t: 'emote', path, name })
+    else pushText(twitchSegments, name) // download failed: show the emote's name
 
     cursor = r.end + 1
   }
 
-  pushText(segments, chars.slice(cursor).join(''))
-  return segments
+  pushText(twitchSegments, chars.slice(cursor).join(''))
+
+  refreshThirdPartyCodes()
+  const resolved = await Promise.all(
+    twitchSegments.map(async (segment): Promise<Segment[]> => {
+      if (segment.t === 'emote') return [segment]
+
+      const parts = splitThirdPartyEmotes(segment.v)
+      const assets = await Promise.all(
+        parts.map(async (part): Promise<Segment> => {
+          if (!part.code) return { t: 'text', v: part.text }
+          if (!part.urls?.length) return { t: 'text', v: part.code }
+          let path: string | null = null
+          for (const url of part.urls) {
+            path = await cacheImage(url)
+            if (path) break
+          }
+          return path
+            ? { t: 'emote', path, name: part.code, animated: options.animated !== false }
+            : { t: 'text', v: part.code }
+        })
+      )
+      const merged: Segment[] = []
+      for (const asset of assets) {
+        if (asset.t === 'text') pushText(merged, asset.v)
+        else merged.push(asset)
+      }
+      return merged
+    })
+  )
+
+  return resolved.flat()
 }
