@@ -1,7 +1,20 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 
+export type GnomeWarningKey =
+  | 'repoNotFound'
+  | 'symlinkElsewhere'
+  | 'symlinkCheckFailed'
+  | 'schemaCompileFailed'
+  | 'staleWayland'
+  | 'staleGeneric'
+
+export interface GnomeWarning {
+  key: GnomeWarningKey
+  params?: Record<string, string>
+}
+
 export interface GnomeStatus {
-  warnings: string[]
+  warnings: GnomeWarning[]
   errors: string[]
   needsRelogin: boolean
   isWayland: boolean
