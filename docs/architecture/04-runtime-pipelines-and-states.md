@@ -1,4 +1,3 @@
-````markdown
 # Runtime pipelines and state machines
 
 This document covers two critical areas not visible in the component view:
@@ -142,4 +141,4 @@ stateDiagram-v2
 If the animator cannot load or a specific asset is unsupported, the extension
 still renders a static icon where possible. The `Unavailable` state does not
 disable chat rendering.
-````
+
