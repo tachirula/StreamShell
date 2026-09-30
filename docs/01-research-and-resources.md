@@ -17,3 +17,8 @@ This document serves as the research log, tracking official documentation, techn
 ## 3. D-Bus IPC (Real-Time Communication)
 - **Gio.DBusConnection Reference:** Native Linux Inter-Process Communication reference in JavaScript. [Gio.DBusConnection](https://gjs-docs.gnome.org/gio20~2.0/gio.dbusconnection)
 - **GJS D-Bus Guide:** How to export objects and emit signals within GNOME Shell. [GJS D-Bus Guide](https://gjs.guide/guides/gio/dbus.html)
+
+## 4. Internationalization (i18n)
+- **MDN — Navigator.language:** Standard used by the renderer to detect the OS locale. [Navigator.language](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/language)
+- **GLib.get_language_names():** Canonical way for GNOME Shell extensions to read the system language. [GLib Reference](https://docs.gtk.org/glib/func.get_language_names.html)
+- **GNU gettext (GJS):** Planned long-term path for the extension once packaged as `.deb`. [GJS gettext Guide](https://gjs.guide/guides/gjs/internationalization.html)
