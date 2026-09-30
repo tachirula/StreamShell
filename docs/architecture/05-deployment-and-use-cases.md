@@ -7,66 +7,60 @@ the Twitch website or Electron renderer.
 
 ## UML deployment diagram
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
+```mermaid
+flowchart LR
+  subgraph Desktop["Linux desktop"]
+    subgraph Session["User session"]
+      subgraph Electron["Electron application"]
+        renderer["React control panel"]
+        preload["Preload bridge"]
+        main["Electron main process"]
+        prefs[("preferences.json<br/>(Electron userData)")]
+        imageCache[("Image cache<br/>(XDG_CACHE_HOME or ~/.cache)")]
+        avatarCache[("Avatar cache<br/>(renderer localStorage)")]
+      end
 
-node "Linux desktop" {
-  node "User session" {
-    node "Electron application" as electron {
-      artifact "React control panel" as renderer
-      artifact "Preload bridge" as preload
-      artifact "Electron main process" as main
-      database "preferences.json\n(Electron userData)" as prefs
-      database "Image cache\n(XDG_CACHE_HOME or ~/.cache)" as imageCache
-      database "Avatar cache\n(renderer localStorage)" as avatarCache
-    }
+      subgraph Shell["GNOME Shell process"]
+        extension["chat-overlay@test<br/>extension.js"]
+        animator["animator.js"]
+        schema["GSettings schema<br/>XML + compiled schema"]
+      end
 
-    node "GNOME Shell process" as shell {
-      artifact "chat-overlay@test\nextension.js" as extension
-      artifact "animator.js" as animator
-      artifact "GSettings schema\nXML + compiled schema" as schema
-    }
+      gsettings[("GSettings values<br/>(dconf)")]
+      dbus(["☁ D-Bus session bus"])
+    end
+  end
 
-    database "GSettings values\n(dconf)" as gsettings
-    cloud "D-Bus session bus" as dbus
-  }
-}
+  subgraph Twitch["☁ Twitch"]
+    irc["IRC WebSocket"]
+    helix["Helix API"]
+  end
 
-cloud "Twitch" as twitch {
-  component "IRC WebSocket" as irc
-  component "Helix API" as helix
-}
+  subgraph Providers["☁ Third-party emote providers"]
+    bttv["BTTV"]
+    ffz["FFZ"]
+    seventv["7TV"]
+  end
 
-cloud "Third-party emote providers" as providers {
-  component "BTTV" as bttv
-  component "FFZ" as ffz
-  component "7TV" as seventv
-}
+  ShellNote["Note: On Wayland, Shell does not hot-reload<br/>extension code or newly added schema keys.<br/>A logout/login loads these updates."]
 
-renderer --> preload : contextBridge API
-preload --> main : Electron IPC
-main --> prefs : validated preferences
-renderer --> avatarCache : cached avatar metadata
-main --> imageCache : downloaded image assets
-main --> irc : chat messages
-main --> helix : user identity and badges
-main --> bttv : optional catalog and CDN
-main --> ffz : optional catalog and CDN
-main --> seventv : optional catalog and CDN
-main --> dbus : owns name and emits signals
-dbus --> extension : chat and settings signals
-extension --> schema : schema lookup
-extension <--> gsettings : read/update extension values
-extension --> animator : local animation module
-extension --> imageCache : render local image files
-
-note right of shell
-  On Wayland, Shell does not hot-reload
-  extension code or newly added schema keys.
-  A logout/login loads these updates.
-end note
-@enduml
+  renderer -->|contextBridge API| preload
+  preload -->|Electron IPC| main
+  main -->|validated preferences| prefs
+  renderer -->|cached avatar metadata| avatarCache
+  main -->|downloaded image assets| imageCache
+  main -->|chat messages| irc
+  main -->|user identity and badges| helix
+  main -->|optional catalog and CDN| bttv
+  main -->|optional catalog and CDN| ffz
+  main -->|optional catalog and CDN| seventv
+  main -->|owns name and emits signals| dbus
+  dbus -->|chat and settings signals| extension
+  extension -->|schema lookup| schema
+  extension <-->|read/update extension values| gsettings
+  extension -->|local animation module| animator
+  extension -->|render local image files| imageCache
+  Shell -.- ShellNote
 ```
 
 The Electron app and GNOME Shell extension are separate processes in the same
@@ -77,48 +71,45 @@ app preferences and GSettings for extension settings.
 
 ## UML use-case diagram
 
-```plantuml
-@startuml
-left to right direction
+```mermaid
+flowchart LR
+  User["👤 Streamer / viewer"]
+  Twitch["👤 Twitch"]
+  EmoteAPIs["👤 Third-party emote APIs"]
+  Shell["👤 GNOME Shell"]
 
-actor "Streamer / viewer" as User
-actor "Twitch" as Twitch
-actor "Third-party emote APIs" as EmoteAPIs
-actor "GNOME Shell" as Shell
+  subgraph System["StreamShell"]
+    Connect(["Connect to channel"])
+    Catalogs(["Load channel badge and<br/>emote catalogs"])
+    ViewChat(["View live chat overlay"])
+    RichChat(["View badges, replies,<br/>and emotes"])
+    History(["Browse recent session<br/>messages"])
+    Toggle(["Toggle overlay visibility"])
+    Assets(["Configure emote quality<br/>and download concurrency"])
+    ThirdParty(["Enable or disable<br/>third-party emote APIs"])
+    OverlayPrefs(["Configure animation<br/>and overlay behavior"])
+    Shortcut(["Record or clear<br/>global shortcut"])
+    ClearCache(["Clear image cache<br/>(while disconnected)"])
+  end
 
-rectangle "StreamShell" {
-  usecase "Connect to channel" as Connect
-  usecase "Load channel badge and\nemote catalogs" as Catalogs
-  usecase "View live chat overlay" as ViewChat
-  usecase "View badges, replies,\nand emotes" as RichChat
-  usecase "Browse recent session\nmessages" as History
-  usecase "Toggle overlay visibility" as Toggle
-  usecase "Configure emote quality\nand download concurrency" as Assets
-  usecase "Enable or disable\nthird-party emote APIs" as ThirdParty
-  usecase "Configure animation\nand overlay behavior" as OverlayPrefs
-  usecase "Record or clear\nglobal shortcut" as Shortcut
-  usecase "Clear image cache\n(while disconnected)" as ClearCache
-}
+  User --- Connect
+  User --- ViewChat
+  User --- History
+  User --- Toggle
+  User --- Assets
+  User --- ThirdParty
+  User --- OverlayPrefs
+  User --- Shortcut
+  User --- ClearCache
+  Twitch --- Connect
+  Twitch --- Catalogs
+  Twitch --- ViewChat
+  EmoteAPIs --- Catalogs
+  Shell --- ViewChat
+  Shell --- Toggle
 
-User --> Connect
-User --> ViewChat
-User --> History
-User --> Toggle
-User --> Assets
-User --> ThirdParty
-User --> OverlayPrefs
-User --> Shortcut
-User --> ClearCache
-Twitch --> Connect
-Twitch --> Catalogs
-Twitch --> ViewChat
-EmoteAPIs --> Catalogs
-Shell --> ViewChat
-Shell --> Toggle
-
-ViewChat ..> RichChat : <<include>>
-Connect ..> Catalogs : <<include>>
-@enduml
+  ViewChat -.->|"«include»"| RichChat
+  Connect -.->|"«include»"| Catalogs
 ```
 
 The global shortcut is registered by GNOME Shell, so it can toggle the overlay
