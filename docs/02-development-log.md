@@ -207,3 +207,180 @@ Display the streamer's Twitch profile picture next to the channel input, making 
 - No rate limit handling beyond "return null on 429". Our usage is a handful of requests per dev session — nowhere near Twitch's 800 points/min budget.
 - No user OAuth. We don't need to read private data, so we don't ask users to authorize anything.
 - No avatar for chatters (only the channel owner). That would need per-user lookups on every message, which is a different design discussion.
+
+## 9. Badges, Emotes and Animated Emotes
+
+### 9.1 Goal
+Make the overlay render chat messages the way a user expects from a
+Twitch client: badge icons before the username, emote images inline,
+animated emotes actually moving, and long messages wrapping cleanly
+inside the box.
+
+### 9.2 Two sources of image assets
+- **Badges:** the IRC `badges` tag only carries ids (`moderator: '1'`,
+  `subscriber: '12'`). The actual images come from Helix, via two
+  endpoints: `/chat/badges/global` and `/chat/badges?broadcaster_id=`.
+  Channel entries override global ones with the same `set_id`, so the
+  resolver merges both indexes with the channel taking precedence.
+  Both are cached for the process lifetime and warmed right after JOIN
+  (`preloadBadges`) so the first message doesn't wait on two round trips.
+- **Emotes:** the IRC `emotes` tag carries id → position ranges. The
+  URL is built from the id (see research section 6). Twitch exposes
+  both a static PNG and an animated GIF for emotes that have one, at
+  slightly different paths. `emote-cache.ts` tries animated first and
+  falls back to static.
+
+### 9.3 Disk cache with content-based extensions
+- Main process downloads each image once to
+  `~/.cache/streamshell/images/` (`XDG_CACHE_HOME` honored, falls back
+  to `~/.cache`). The extension only ever sees local file paths — it
+  never makes network calls.
+- Cache key is `sha1(url)`. Twitch image URLs are immutable, so no
+  invalidation logic is needed.
+- **The extension is chosen from the actual bytes, not the URL.** The
+  animated and static emote URLs are almost identical; only the response
+  body (GIF magic bytes `GIF`) tells them apart. `detectExt` checks the
+  first three bytes and picks `.gif` or `.png` accordingly.
+- Writes go through a temp file plus `rename`, so a crash mid-write
+  never leaves a truncated image treated as a valid cache hit.
+- Concurrent requests for the same URL are deduped with an in-flight
+  promise map.
+- **Negative caching:** a `noanim-<id>` marker on disk remembers
+  emote ids whose animated variant returns 404, so the animated URL is
+  not requested again in future sessions. Timeouts and 5xx do *not*
+  create a marker — those are retried next time.
+
+### 9.4 Message pipeline — segment parsing
+- New module `chat-segments.ts` splits the message text into typed
+  segments: `{ t: 'text', v }` and `{ t: 'emote', path, name }`.
+- **Critical detail:** Twitch ranges are in Unicode code points, not
+  UTF-16 units. A single emoji counts as 1 for Twitch but 2 for
+  JavaScript's `String.length`. The message is therefore split with
+  `Array.from(message)` — using `substring()` would corrupt any message
+  that contains an astral-plane character (emoji, some CJK extensions).
+- Malformed or out-of-bounds ranges are dropped instead of throwing.
+- Adjacent text chunks are merged so the output has no empty text
+  segments.
+- Emotes are fetched in parallel via `Promise.all`; if a download
+  fails, the emote's name is emitted as plain text, so no message
+  content is ever lost.
+
+### 9.5 Message pipeline — ordering and resilience
+- Two async operations happen per message: badge resolution (Helix
+  calls, potentially cached) and segment building (emote downloads).
+  Both can be slow on cold caches.
+- **Ordering:** if we let every message run its own async chain, two
+  messages arriving 10ms apart could resolve in reverse order and
+  appear swapped in the overlay. A single `messageChain` promise
+  serializes processing — each message waits for the previous one to
+  finish before emitting its D-Bus signal. This keeps the visible
+  order exactly the arrival order.
+- **Failure isolation:** the per-message body is wrapped in a try/catch
+  so a badge hiccup degrades to a plain-text message instead of
+  skipping it. The outer `.catch` on the chain prevents an unhandled
+  rejection from poisoning every subsequent message.
+
+### 9.6 D-Bus payload — still `'sss'`
+- The `MessageReceived` signal signature stays `'sss'`. The third
+  argument is still a string — it's just JSON now:
+  `{ badges: string[], segments: Segment[] }`.
+- **No schema change, no preload change, no renderer change.** The
+  renderer never touches chat messages; only main → extension flows
+  this data. Keeping the signature unchanged means the update is
+  backward-compatible at the D-Bus layer.
+
+### 9.7 Extension-side rendering
+- The old single `St.Label` with Pango markup was replaced by a
+  vertical `St.BoxLayout` of message rows. Each row is a horizontal
+  `St.BoxLayout` containing: badge icons (18px), the colored username,
+  and the message content as a sequence of text labels and emote icons
+  (24px).
+- **Word wrapping is manual.** Clutter's `FlowLayout` is a
+  column-aligned grid, not inline text flow. The renderer appends each
+  child to the current row, measures the row, and moves that child to
+  a new row if the row exceeds `ROW_WIDTH`. This requires the message
+  box to be already attached to the stage so widths are measured with
+  the real theme, which is why `_onMessageReceived` adds the box first
+  and populates it second.
+- `MAX_WORD_LEN` splits unbreakable words (URLs, spam) so they can't
+  overflow the box.
+- `_makeIcon` validates that every path is absolute and ends in
+  `.png`/`.gif` — defense in depth against a malformed payload.
+- `_parsePayload` falls back to treating the third D-Bus argument as
+  plain text if JSON parsing fails, so an older backend running
+  alongside a newer extension (or vice versa) degrades gracefully.
+- `_onMessageReceived` catches layout errors and falls back to a
+  single wrapped label showing emote names in place of the missing
+  images. The user always sees the message content, even when the
+  fancy layout fails.
+
+### 9.8 Animated emotes — the engine
+GNOME Shell runs all extension JS in the compositor's main thread. A
+naive per-emote `GLib.timeout_add` would freeze the desktop the moment
+ten animated emotes appear on screen. `gnome-extension/animator.js`
+keeps the cost bounded with five rules:
+
+  1. **One timer for everything.** A single `GLib.timeout_add` drives
+     every animated emote. It is removed as soon as nothing needs
+     animating (last actor destroyed or animation disabled).
+  2. **One Cairo surface per distinct emote, shared by every actor.**
+     Fourteen copies of Kappa on screen cost one frame upload per
+     tick, not fourteen. Actors are `St.DrawingArea` that repaint from
+     the shared surface; the animator just calls `queue_repaint()` on
+     each after uploading a new frame.
+  3. **Pause while hidden.** The timer stops while the backend is gone
+     or the Activities Overview is open. Frames are selected by wall
+     clock (`iter.advance(null)`), so animations resume **in sync**
+     rather than restarting from frame 0. The pause state is derived
+     from two sources via a single `_syncAnimatorPause()` helper, so
+     there's only one place that decides whether the timer runs.
+  4. **Cap on distinct animated emotes.** `maxAnimated: 16`. Beyond
+     it, new emotes render as a still (first frame) so they never cost
+     CPU. This prevents a "spam 100 distinct animated emotes" scenario
+     from degrading the compositor.
+  5. **Full disable via GSettings.** `setEnabled(false)` stops the
+     timer and rewinds every entry to its first frame. Wired to the
+     `animated-emotes` boolean in the schema, so users can turn it off
+     from dconf without a relogin.
+
+Robustness details:
+- Frames are drawn with a per-row RLE blit instead of assuming a fixed
+  Cairo stride. Pixbufs from different GTK themes have different
+  channel counts and row padding, and Cairo's `ImageSurface` has its
+  own stride. Copying byte-for-byte would produce garbage on some
+  systems.
+- Animations whose frame dimensions change mid-playback are logged
+  once and skipped, instead of corrupting the shared surface.
+- `_warnOnce` caps journal noise: a malformed GIF doesn't log on every
+  frame.
+- `destroy()` releases the GLib source and both caches, so disabling
+  the extension doesn't leave timers or references behind.
+
+### 9.9 Extension — integration
+- `EmoteAnimator` is imported dynamically (`import('./animator.js')`).
+  If anything in the Shell environment is missing (GdkPixbuf typelib
+  not installed, for instance), the promise rejects, the extension
+  logs once, and emotes degrade to static `St.Icon` actors. The rest
+  of the overlay keeps working.
+- The GSettings schema is probed with `has_key` before reading the
+  `animated-emotes` key. **Reading an unknown key aborts gnome-shell** —
+  a stale `.compiled` file would take the whole desktop down. Probing
+  means a stale schema fails safe (animation stays on) instead of
+  crashing. The check exists because anyone who pulls this change
+  must run `glib-compile-schemas` before launching Shell.
+- The animator pauses on `_onBackendAppeared` / `_onBackendVanished`
+  and on Activities Overview show/hide, and resumes on the reverse
+  transitions.
+
+### 9.10 What we don't do (yet)
+- **No third-party emotes** (BTTV / 7TV / FFZ). That requires per-channel
+  dictionaries, another cache layer, and a different URL scheme.
+  A TODO is left in `emote-cache.ts`.
+- **No Unicode-range emote layout.** Emotes are rendered as icons in
+  the row layout, not as inline glyphs. Mixed text/emote wrapping is
+  approximate: an emote that lands at the boundary wraps as a whole
+  icon rather than splitting the surrounding text.
+- **No animation frame interpolation.** GIFs play at their native
+  frame rate (tick is ~40ms, most GIFs use 50–100ms delays). Rendered
+  smoothness on Wayland depends on the compositor's repaint timing,
+  not ours.
