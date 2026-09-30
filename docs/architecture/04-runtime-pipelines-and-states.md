@@ -1,3 +1,4 @@
+````markdown
 # Runtime pipelines and state machines
 
 This document covers two critical areas not visible in the component view:
@@ -11,43 +12,56 @@ catalog loading concurrently. The BTTV, FFZ, and 7TV requests also run
 concurrently, each with a 15-second request timeout. Messages wait for the
 third-party catalog-loading task to settle before segment construction.
 
-```plantuml
-@startuml
-start
+```mermaid
+flowchart TD
+  Start(["Start"])
 
-partition "Electron main" {
-  :Receive IRC message and tags;
-  :Append to messageChain;
-  :Wait for thirdPartyEmotesReady;
-  fork
-    :Resolve badge IDs to cached/local image paths;
-  fork again
-    :Parse Twitch emote code-point ranges;
-    :Match third-party codes as whole words;
-    :Resolve images via FIFO workers\n(configured concurrency);
-    if (Image asset available?) then (yes)
-      :Use local image path;
-    else (no)
-      :Keep emote code as text;
-    endif
-  end fork
-  :Build JSON payload with badges,\nsegments, and optional reply metadata;
-  :Emit MessageReceived(user, color, JSON);
-}
+  subgraph Main["Electron main"]
+    A1["Receive IRC message and tags"]
+    A2["Append to messageChain"]
+    A3["Wait for thirdPartyEmotesReady"]
+    Fork(["Fork (parallel branches)"])
 
-partition "GNOME extension" {
-  :Receive D-Bus signal;
-  :Validate payload and local paths;
-  :Build reply line, badge row,\ntext, and emote actors;
-  if (Rich layout succeeds?) then (yes)
-    :Render wrapped message row;
-  else (no)
-    :Render readable text fallback;
-  endif
-}
+    B1["Resolve badge IDs to<br/>cached/local image paths"]
 
-stop
-@enduml
+    C1["Parse Twitch emote<br/>code-point ranges"]
+    C2["Match third-party codes<br/>as whole words"]
+    C3["Resolve images via FIFO workers<br/>(configured concurrency)"]
+    D1{"Image asset available?"}
+    D2["Use local image path"]
+    D3["Keep emote code as text"]
+
+    Join(["Join"])
+    E1["Build JSON payload with badges,<br/>segments, and optional reply metadata"]
+    E2["Emit MessageReceived(user, color, JSON)"]
+  end
+
+  subgraph Ext["GNOME extension"]
+    G1["Receive D-Bus signal"]
+    G2["Validate payload and local paths"]
+    G3["Build reply line, badge row,<br/>text, and emote actors"]
+    H1{"Rich layout succeeds?"}
+    H2["Render wrapped message row"]
+    H3["Render readable text fallback"]
+  end
+
+  Stop(["End"])
+
+  Start --> A1 --> A2 --> A3 --> Fork
+  Fork --> B1
+  Fork --> C1
+  C1 --> C2 --> C3 --> D1
+  D1 -->|yes| D2
+  D1 -->|no| D3
+  B1 --> Join
+  D2 --> Join
+  D3 --> Join
+  Join --> E1 --> E2
+  E2 --> G1 --> G2 --> G3 --> H1
+  H1 -->|yes| H2
+  H1 -->|no| H3
+  H2 --> Stop
+  H3 --> Stop
 ```
 
 The worker count bounds simultaneous image downloads; the queue is FIFO and
@@ -128,3 +142,4 @@ stateDiagram-v2
 If the animator cannot load or a specific asset is unsupported, the extension
 still renders a static icon where possible. The `Unavailable` state does not
 disable chat rendering.
+````
