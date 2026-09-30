@@ -4,6 +4,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 const api = {
   setChannel: (channel: string) => ipcRenderer.send('set-twitch-channel', channel),
   disconnectChannel: () => ipcRenderer.send('disconnect-twitch'),
+  getStreamerAvatar: (channel: string) => ipcRenderer.invoke('get-streamer-avatar', channel),
 
   onTwitchConnected: (cb: (data: { channel: string }) => void) => {
     const listener = (_e: unknown, data: any) => cb(data)
@@ -22,7 +23,7 @@ const api = {
   },
 
   onGnomeStatus: (cb: (data: {
-    warnings: string[]
+    warnings: { key: string; params?: Record<string, string> }[]
     errors: string[]
     needsRelogin: boolean
     isWayland: boolean
