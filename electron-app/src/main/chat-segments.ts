@@ -11,9 +11,7 @@ import { cacheEmote } from './emote-cache'
 // why the message is split with Array.from() instead of using substring():
 // a single emoji counts as 1 for Twitch but 2 for JavaScript's .length.
 
-export type Segment =
-  | { t: 'text'; v: string }
-  | { t: 'emote'; path: string; name: string }
+export type Segment = { t: 'text'; v: string } | { t: 'emote'; path: string; name: string }
 
 export interface ChatPayload {
   badges: string[]
@@ -26,7 +24,10 @@ interface EmoteRange {
   id: string
 }
 
-function parseRanges(emotesTag: Record<string, string[]> | null | undefined, length: number): EmoteRange[] {
+function parseRanges(
+  emotesTag: Record<string, string[]> | null | undefined,
+  length: number
+): EmoteRange[] {
   if (!emotesTag) return []
 
   const ranges: EmoteRange[] = []
@@ -47,7 +48,8 @@ function parseRanges(emotesTag: Record<string, string[]> | null | undefined, len
 function pushText(segments: Segment[], value: string): void {
   if (!value) return
   const last = segments[segments.length - 1]
-  if (last && last.t === 'text') last.v += value // merge adjacent text
+  if (last && last.t === 'text')
+    last.v += value // merge adjacent text
   else segments.push({ t: 'text', v: value })
 }
 
@@ -57,7 +59,8 @@ function pushText(segments: Segment[], value: string): void {
  */
 export async function buildSegments(
   message: string,
-  emotesTag: Record<string, string[]> | null | undefined
+  emotesTag: Record<string, string[]> | null | undefined,
+  options: { animated?: boolean } = {}
 ): Promise<Segment[]> {
   const chars = Array.from(message)
   const ranges = parseRanges(emotesTag, chars.length)
@@ -69,7 +72,7 @@ export async function buildSegments(
   const paths = new Map<string, string | null>()
   await Promise.all(
     uniqueIds.map(async (id) => {
-      paths.set(id, await cacheEmote(id))
+      paths.set(id, await cacheEmote(id, options.animated === false ? 'static' : 'animated'))
     })
   )
 
