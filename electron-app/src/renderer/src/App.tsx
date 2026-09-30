@@ -22,6 +22,8 @@ function App(): ReactElement {
   const [channel, setChannel] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [gnomeWarnings, setGnomeWarnings] = useState<string[]>([])
+  const [warningsDismissed, setWarningsDismissed] = useState(false)
 
   // Suscripción a los eventos REALES del backend
   useEffect(() => {
@@ -44,6 +46,15 @@ function App(): ReactElement {
       offError()
       offDisconnected()
     }
+  }, [])
+
+  // Estado de GNOME (symlink, schema, extensión stale)
+  useEffect(() => {
+    const off = window.api.onGnomeStatus((data) => {
+      console.log('[Renderer] gnome:status →', data)
+      setGnomeWarnings(data.warnings ?? [])
+    })
+    return () => off()
   }, [])
 
   const handleAction = () => {
@@ -109,6 +120,47 @@ function App(): ReactElement {
         <h1 style={{ color: '#bf94ff', margin: 0 }}>StreamShell</h1>
       </div>
       <p style={{ color: '#adadb8', marginTop: 0 }}>Panel de Control del Overlay</p>
+
+      {gnomeWarnings.length > 0 && !warningsDismissed && (
+        <div
+          style={{
+            marginTop: '1rem',
+            padding: '0.75rem 1rem',
+            borderLeft: '4px solid #f59e0b',
+            background: '#26262c',
+            borderRadius: '4px',
+            fontSize: '0.9rem',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '12px',
+            width: '350px',
+            maxWidth: '100%',
+            animation: 'fadeIn 0.3s ease-in-out'
+          }}
+        >
+          <div style={{ flex: 1 }}>
+            <strong style={{ color: '#f59e0b' }}>Aviso de GNOME Shell</strong>
+            {gnomeWarnings.map((w, i) => (
+              <div key={i} style={{ marginTop: '4px', color: '#e0e0e0' }}>{w}</div>
+            ))}
+          </div>
+          <button
+            onClick={() => setWarningsDismissed(true)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#a1a1aa',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              padding: 0,
+              lineHeight: 1
+            }}
+            aria-label="Cerrar aviso"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div style={{ marginTop: '2.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', width: '350px', maxWidth: '100%' }}>
         <label htmlFor="channel" style={{ fontWeight: '600' }}>Canal de Twitch:</label>
