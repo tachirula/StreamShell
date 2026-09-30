@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useState, useEffect, type ReactElement } from 'react'
 import twitchLogo from './assets/twitch-logo.png'
 
 // --- SVGs Integrados ---
@@ -16,26 +16,51 @@ const CancelIcon = () => (
 )
 // -----------------------
 
+type Status = 'idle' | 'connecting' | 'connected' | 'error'
+
 function App(): ReactElement {
   const [channel, setChannel] = useState('')
-  const [status, setStatus] = useState<'idle' | 'connecting' | 'connected'>('idle')
+  const [status, setStatus] = useState<Status>('idle')
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // Suscripción a los eventos REALES del backend
+  useEffect(() => {
+    const offConnected = window.api.onTwitchConnected(({ channel: ch }) => {
+      console.log('[Renderer] twitch:connected →', ch)
+      setErrorMsg(null)
+      setStatus('connected')
+    })
+    const offError = window.api.onTwitchError(({ message }) => {
+      console.log('[Renderer] twitch:error →', message)
+      setErrorMsg(message)
+      setStatus('error')
+    })
+    const offDisconnected = window.api.onTwitchDisconnected(({ reason }) => {
+      console.log('[Renderer] twitch:disconnected →', reason)
+    })
+
+    return () => {
+      offConnected()
+      offError()
+      offDisconnected()
+    }
+  }, [])
 
   const handleAction = () => {
+    // Cancelar / desconectar
     if (status !== 'idle') {
       window.api.disconnectChannel()
       setStatus('idle')
+      setErrorMsg(null)
       return
     }
 
     const cleanChannel = channel.trim().toLowerCase()
     if (!cleanChannel) return
 
+    setErrorMsg(null)
     setStatus('connecting')
-
-    setTimeout(() => {
-      window.api.setChannel(cleanChannel)
-      setStatus('connected')
-    }, 1200)
+    window.api.setChannel(cleanChannel)   // el paso a 'connected' lo decide el backend
   }
 
   const isConnected = status === 'connected' || status === 'connecting'
@@ -93,15 +118,15 @@ function App(): ReactElement {
           type="text"
           placeholder="Ej: hashiruta"
           value={channel}
-          disabled={status !== 'idle'}
+          disabled={status !== 'idle' && status !== 'error'}
           onChange={(e) => setChannel(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleAction()}
           style={{
             padding: '0.75rem',
             borderRadius: '6px',
             border: '2px solid #3f3f46',
-            background: status !== 'idle' ? '#27272a' : '#0e0e10',
-            color: status !== 'idle' ? '#a1a1aa' : '#fff',
+            background: (status !== 'idle' && status !== 'error') ? '#27272a' : '#0e0e10',
+            color: (status !== 'idle' && status !== 'error') ? '#a1a1aa' : '#fff',
             fontSize: '1rem',
             outline: 'none',
             transition: 'all 0.2s ease'
@@ -129,6 +154,7 @@ function App(): ReactElement {
           }}
         >
           {status === 'idle' && 'Conectar al Chat'}
+          {status === 'error' && 'Reintentar conexión'}
           {status === 'connecting' && (
             <>
               <LoadingIcon />
@@ -156,6 +182,21 @@ function App(): ReactElement {
           }}
         >
           Estado: Recibiendo mensajes de <strong style={{ color: '#00ff7f' }}>{channel}</strong>
+        </div>
+      )}
+
+      {status === 'error' && (
+        <div
+          style={{
+            marginTop: '2rem',
+            padding: '1rem',
+            borderLeft: '4px solid #ef4444',
+            background: '#26262c',
+            borderRadius: '4px',
+            animation: 'fadeIn 0.3s ease-in-out'
+          }}
+        >
+          Error al conectar: <strong style={{ color: '#ef4444' }}>{errorMsg}</strong>
         </div>
       )}
     </div>
