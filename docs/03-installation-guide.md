@@ -6,7 +6,7 @@ This guide details the exact steps and dependencies required to build and run St
 - **Node.js (v18+) & npm:** For the Electron/React backend.
 - **GNOME Shell 45+ (Linux):** The overlay is a GNOME Shell extension.
 - **glib-compile-schemas:** Usually pre-installed on GNOME systems. Only needed if the app cannot find it on `PATH`; the app will try to compile the schema automatically.
-- **Twitch Developer account:** Needed to obtain the Client ID and Client Secret used for the avatar feature.
+- **Twitch Developer account:** Needed to obtain the Client ID and Client Secret used for the avatar, badge and emote features.
 
 ## 1. Electron Backend Initialization
 The backend is scaffolded using `electron-vite` with React and TypeScript.
@@ -21,9 +21,9 @@ npm install
 - `dbus-next`: Implements the D-Bus emitter used to broadcast chat messages to the GNOME Shell extension.
 - `dotenv`: Loads `electron-app/.env` into `process.env` at startup.
 
-## 2. Twitch Developer App (for the avatar feature)
+## 2. Twitch Developer App
 
-The panel shows the streamer's profile picture next to the channel input. That lookup uses the Twitch Helix API, which requires an OAuth client.
+The panel shows the streamer's profile picture next to the channel input, and the overlay renders badge icons next to each username. Both lookups use the Twitch Helix API, which requires an OAuth client.
 
 ### One-time setup
 
@@ -79,7 +79,16 @@ Unlike previous iterations, **no manual `gnome-extensions enable` or `glib-compi
 
 ### What the app cannot do for you
 
-**Wayland does not hot-reload GNOME Shell extensions.** After editing `extension.js`, you must log out and log back in once so the shell picks up the new code. The app detects this situation (compares `extension.js` mtime against `gnome-shell`'s start time) and shows a banner reminding you to relogin.
+**Wayland does not hot-reload GNOME Shell extensions.** After editing `extension.js` or `animator.js`, you must log out and log back in once so the shell picks up the new code. The app detects this situation (compares `extension.js` mtime against `gnome-shell`'s start time) and shows a banner reminding you to relogin.
+
+**Changes to the GSettings schema need a recompile.** If you edit `org.gnome.shell.extensions.chat-overlay.gschema.xml` (for example, to add a new key), run:
+
+```bash
+cd gnome-extension
+glib-compile-schemas schemas/
+```
+
+before the next Shell startup. A stale `gschemas.compiled` means the extension sees the old key set. The extension probes keys with `has_key` before reading them, so a missing key fails safe — but the feature it controls won't work until the schema is recompiled and Shell picks it up.
 
 ### Manual setup (only needed if the automatic setup fails)
 
@@ -112,7 +121,7 @@ Expected behavior:
 3. The GNOME extension is enabled and starts watching `org.streamshell.Twitch` on the session bus.
 4. As soon as the backend claims the bus name, the overlay appears in the top-right corner with a localized "Waiting for Twitch connection..." / "Esperando conexión a Twitch..." placeholder.
 5. Type a channel name. After ~2s (or immediately on blur), the streamer's avatar appears next to the input.
-6. Click the connect button — the panel turns green once Twitch confirms the JOIN, and chat messages start flowing to the overlay.
+6. Click the connect button — the panel turns green once Twitch confirms the JOIN, and chat messages start flowing to the overlay with badges, emotes and wrapped text.
 7. Close the app (Ctrl+C or the window's close button) — the overlay hides itself automatically. The extension remains enabled but invisible until the app runs again.
 
 ### Overriding the locale
@@ -137,11 +146,41 @@ Currently: **English** and **Spanish**. Adding a language requires two small edi
 
 Both are intentionally kept as flat dictionaries for now. Once the extension moves to a gettext-based build (planned for the `.deb` target), the extension side will switch to standard `.po`/`.mo` files.
 
-### Avatar cache
+### Avatar and image caches
 
-The streamer avatar is cached in two places:
+Three caches back the overlay's remote assets:
 
-- **Main process (in-memory):** valid for the process lifetime.
-- **Renderer (localStorage):** valid for 24h, survives restarts.
+- **Renderer avatar cache (localStorage):** the streamer's profile image, keyed by channel name. 24h TTL, survives restarts.
+- **Main-process image cache (in-memory):** every downloaded URL, valid for the process lifetime.
+- **Main-process image cache (on disk):** PNGs and GIFs stored under `~/.cache/streamshell/images/`, keyed by `sha1(url)`. Never invalidated — Twitch image URLs are immutable.
 
-To force a refresh during development, open DevTools → Application → Local Storage → delete the `streamshell.avatar-cache.v1` key, then reload.
+To force a full refresh during development:
+
+```bash
+# Wipe all cached images (badges, emotes, animated emotes)
+rm -rf ~/.cache/streamshell/images/
+```
+
+Then in DevTools → Application → Local Storage → delete the `streamshell.avatar-cache.v1` key and reload.
+
+### Animated emotes
+
+Animated emotes are on by default. They can be turned off live without a relogin:
+
+```bash
+# Uses the compiled schema in the repo. Adjust the path if you installed
+# the extension elsewhere.
+gsettings --schemadir ~/StreamShell/gnome-extension/schemas \
+  set org.gnome.shell.extensions.chat-overlay animated-emotes false
+```
+
+Turn them back on with `true`. The extension picks up the change immediately: the animator stops, every visible emote is rewound to its first frame, and no new GIF is played.
+
+To check the schema is being read correctly:
+
+```bash
+gsettings --schemadir ~/StreamShell/gnome-extension/schemas \
+  list-keys org.gnome.shell.extensions.chat-overlay
+```
+
+Expected output includes `background-opacity` and `animated-emotes`. If `animated-emotes` is missing, the schema wasn't recompiled after the last XML change (see section 3).
