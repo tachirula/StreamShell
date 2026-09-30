@@ -24,6 +24,7 @@ export default class ChatOverlayTest extends Extension {
         this._box = null;
         this._label = null;
         this._signalId = null;
+        this._clearSignalId = null;
         this._nameWatchId = null;
 
         // Reposicionamiento — siempre conectado, es barato.
@@ -52,9 +53,21 @@ export default class ChatOverlayTest extends Extension {
             }
         );
 
-        //    Observar la presencia del backend Electron
-        //    en el bus de sesión. Se dispara cuando el nombre aparece
-        //    (Electron arranca) o desaparece (Electron cierra).
+        // Suscripción al signal de reseteo. El backend lo emite cuando
+        // el usuario conecta a un canal nuevo o pulsa "Cancelar conexión".
+        this._clearSignalId = Gio.DBus.session.signal_subscribe(
+            BUS_NAME,
+            INTERFACE,
+            'ChatCleared',
+            OBJECT_PATH,
+            null,
+            Gio.DBusSignalFlags.NONE,
+            () => this._onChatCleared()
+        );
+
+        // Observar la presencia del backend Electron en el bus de sesión.
+        // Se dispara cuando el nombre aparece (Electron arranca) o
+        // desaparece (Electron cierra).
         this._nameWatchId = Gio.bus_watch_name(
             Gio.BusType.SESSION,
             BUS_NAME,
@@ -74,6 +87,14 @@ export default class ChatOverlayTest extends Extension {
     _onBackendVanished() {
         console.log('[StreamShell] backend gone, hiding overlay');
         this._hideBox();
+    }
+
+    _onChatCleared() {
+        console.log('[StreamShell] chat cleared');
+        this._lines = [];
+        if (this._label) {
+            this._label.get_clutter_text().set_markup(WAITING_MARKUP);
+        }
     }
 
     _buildBox() {
@@ -181,6 +202,10 @@ export default class ChatOverlayTest extends Extension {
         if (this._signalId)
             Gio.DBus.session.signal_unsubscribe(this._signalId);
         this._signalId = null;
+
+        if (this._clearSignalId)
+            Gio.DBus.session.signal_unsubscribe(this._clearSignalId);
+        this._clearSignalId = null;
 
         if (this._nameWatchId) {
             Gio.bus_unwatch_name(this._nameWatchId);
