@@ -11,6 +11,11 @@ const api = {
     maxVisibleMessages: number
     historyEnabled: boolean
     historyLimit: number
+    thirdPartyEmotesEnabled: boolean
+    toggleChatShortcut: string
+    emoteImageScale: '1x' | '3x' | '4x'
+    emoteBestQuality: boolean
+    maxConcurrentImageDownloads: number
   }) => ipcRenderer.invoke('preferences:set', preferences),
   clearCache: () => ipcRenderer.invoke('cache:clear'),
 

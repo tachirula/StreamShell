@@ -25,6 +25,11 @@ export interface AppPreferences {
   maxVisibleMessages: number
   historyEnabled: boolean
   historyLimit: number
+  thirdPartyEmotesEnabled: boolean
+  toggleChatShortcut: string
+  emoteImageScale: '1x' | '3x' | '4x'
+  emoteBestQuality: boolean
+  maxConcurrentImageDownloads: number
 }
 
 declare global {

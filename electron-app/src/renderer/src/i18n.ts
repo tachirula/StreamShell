@@ -39,6 +39,20 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     'settings.historyLimit': 'Messages retained for scrolling',
     'settings.historyRisk':
       'Higher values keep more messages and emote images in memory and may briefly load many emotes. Maximum: 100 messages.',
+    'settings.emoteQuality': 'Third-party emote quality',
+    'settings.thirdPartyEmotesEnabled': 'Enable support for BTTV, FFZ and 7TV',
+    'settings.thirdPartyEmotesHelp':
+      'When disabled, third-party emote codes stay as plain text and their APIs are not queried.',
+    'settings.emoteBestQuality': 'Always use the best available quality',
+    'settings.emoteImageScale': 'Requested image size',
+    'settings.emoteQualityCacheHint':
+      'For best results after changing quality, clear the image cache below while disconnected from Twitch.',
+    'settings.downloads': 'Image downloads',
+    'settings.concurrentDownloads': 'Maximum simultaneous downloads',
+    'settings.concurrentDownloadsHelp':
+      'Choose from 1 to 16. Higher values may download emotes faster but use more network bandwidth and system resources.',
+    'settings.backendWaylandNote':
+      'This backend setting applies immediately and does not require logging out. GNOME extension code changes on Wayland require logging out and back in.',
     'settings.cache': 'Image cache',
     'settings.clearCache': 'Clear image cache',
     'settings.cacheRecommendation': 'For best results, clear the cache while no stream is active.',
@@ -94,6 +108,20 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     'settings.historyLimit': 'Mensajes que se conservan para desplazarse',
     'settings.historyRisk':
       'Un valor alto conserva más mensajes e imágenes de emotes en memoria y puede cargar muchos emotes de golpe. Máximo: 100 mensajes.',
+    'settings.emoteQuality': 'Calidad de emotes de terceros',
+    'settings.thirdPartyEmotesEnabled': 'Activar soporte para BTTV, FFZ y 7TV',
+    'settings.thirdPartyEmotesHelp':
+      'Al desactivarlo, los códigos de emotes de terceros se muestran como texto y no se consultan sus APIs.',
+    'settings.emoteBestQuality': 'Usar siempre la mejor calidad disponible',
+    'settings.emoteImageScale': 'Tamaño de imagen solicitado',
+    'settings.emoteQualityCacheHint':
+      'Para mejores resultados después de cambiar la calidad, borra la caché de imágenes abajo cuando estés desconectado de Twitch.',
+    'settings.downloads': 'Descargas de imágenes',
+    'settings.concurrentDownloads': 'Máximo de descargas simultáneas',
+    'settings.concurrentDownloadsHelp':
+      'Elige entre 1 y 16. Un valor mayor puede descargar emotes más rápido, pero usa más ancho de banda y recursos del sistema.',
+    'settings.backendWaylandNote':
+      'Este ajuste del backend se aplica inmediatamente y no requiere cerrar sesión. Los cambios al código de la extensión GNOME en Wayland sí requieren cerrar sesión y volver a entrar.',
     'settings.cache': 'Caché de imágenes',
     'settings.clearCache': 'Borrar caché de imágenes',
     'settings.cacheRecommendation':

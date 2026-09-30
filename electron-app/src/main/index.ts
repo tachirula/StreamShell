@@ -2,8 +2,9 @@ import './load-env'
 
 import { getStreamerAvatar, getUserInfo } from './twitch-api'
 import { preloadBadges, resolveBadges } from './twitch-badges'
-import { buildSegments, type Segment } from './chat-segments'
-import { clearImageCache } from './emote-cache'
+import { buildSegments, stripReplyMention, type ChatReply, type Segment } from './chat-segments'
+import { clearImageCache, setMaxConcurrentImageDownloads } from './emote-cache'
+import { clearThirdPartyEmotes, loadThirdPartyEmotes } from './third-party-emotes'
 import {
   DEFAULT_PREFERENCES,
   loadPreferences,
@@ -63,6 +64,7 @@ let mainWindow: BrowserWindow | null = null
 let joinTimeout: NodeJS.Timeout | null = null
 let broadcasterId: string | null = null
 let messageChain: Promise<void> = Promise.resolve()
+let thirdPartyEmotesReady: Promise<void> = Promise.resolve()
 let pendingGnomeStatus: GnomeCheckResult | null = null
 let preferences: AppPreferences = DEFAULT_PREFERENCES
 let activeChannel: string | null = null
@@ -166,7 +168,8 @@ async function publishPreferences(): Promise<void> {
         chatWidth: preferences.chatWidth,
         maxVisibleMessages: preferences.maxVisibleMessages,
         historyEnabled: preferences.historyEnabled,
-        historyLimit: preferences.historyLimit
+        historyLimit: preferences.historyLimit,
+        toggleChatShortcut: preferences.toggleChatShortcut
       })
     )
     if (shouldReplayHistory) {
@@ -354,7 +357,26 @@ app.whenReady().then(async () => {
   ipcMain.handle('preferences:set', async (_event, value: unknown) => {
     const next = validatePreferences(value)
     await savePreferences(next)
+    if (next.maxConcurrentImageDownloads !== preferences.maxConcurrentImageDownloads) {
+      setMaxConcurrentImageDownloads(next.maxConcurrentImageDownloads)
+    }
+    const thirdPartyEmotesChanged =
+      next.thirdPartyEmotesEnabled !== preferences.thirdPartyEmotesEnabled
+    const emoteQualityChanged =
+      next.emoteImageScale !== preferences.emoteImageScale ||
+      next.emoteBestQuality !== preferences.emoteBestQuality
     preferences = next
+    if (!preferences.thirdPartyEmotesEnabled) {
+      clearThirdPartyEmotes()
+      thirdPartyEmotesReady = Promise.resolve()
+    } else if ((thirdPartyEmotesChanged || emoteQualityChanged) && activeChannel && broadcasterId) {
+      thirdPartyEmotesReady = loadThirdPartyEmotes(activeChannel, broadcasterId, {
+        imageScale: preferences.emoteImageScale,
+        bestQuality: preferences.emoteBestQuality
+      }).catch((error) => {
+        console.error('[StreamShell Backend] Failed to reload emotes with updated quality:', error)
+      })
+    }
     await publishPreferences()
     return preferences
   })

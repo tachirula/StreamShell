@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, type ReactElement } from 'react'
+import { useState, useEffect, useRef, type KeyboardEvent, type ReactElement } from 'react'
+import { MAX_CONCURRENT_IMAGE_DOWNLOADS } from '../../shared/settings-constraints'
 import twitchLogo from './assets/twitch-logo.png'
 import { t } from './i18n'
 import { clearAvatarCache, getCachedAvatar, setCachedAvatar } from './avatar-cache'
@@ -61,6 +62,11 @@ interface Preferences {
   maxVisibleMessages: number
   historyEnabled: boolean
   historyLimit: number
+  thirdPartyEmotesEnabled: boolean
+  toggleChatShortcut: string
+  emoteImageScale: '1x' | '3x' | '4x'
+  emoteBestQuality: boolean
+  maxConcurrentImageDownloads: number
 }
 
 interface GnomeWarningView {
@@ -352,6 +358,139 @@ function SettingsPanel({
                 style={rangeStyle}
               />
             </label>
+          </fieldset>
+
+          <fieldset
+            style={{
+              border: '1px solid #3f3f46',
+              borderRadius: '8px',
+              padding: '1rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem'
+            }}
+          >
+            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
+              {t('settings.downloads')}
+            </legend>
+            <label style={fieldStyle}>
+              <span>{t('settings.concurrentDownloads')}</span>
+              <input
+                type="number"
+                min="1"
+                max={MAX_CONCURRENT_IMAGE_DOWNLOADS}
+                step="1"
+                value={preferences.maxConcurrentImageDownloads}
+                onChange={(event) => {
+                  const count = event.currentTarget.valueAsNumber
+                  if (
+                    Number.isInteger(count) &&
+                    count >= 1 &&
+                    count <= MAX_CONCURRENT_IMAGE_DOWNLOADS
+                  ) {
+                    onChange({ maxConcurrentImageDownloads: count })
+                  }
+                }}
+                style={{
+                  padding: '0.55rem',
+                  border: '1px solid #52525b',
+                  borderRadius: '6px',
+                  background: '#27272a',
+                  color: '#fff'
+                }}
+              />
+            </label>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
+              {t('settings.concurrentDownloadsHelp')}
+            </p>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
+              {t('settings.backendWaylandNote')}
+            </p>
+          </fieldset>
+
+          <fieldset
+            style={{
+              border: '1px solid #3f3f46',
+              borderRadius: '8px',
+              padding: '1rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem'
+            }}
+          >
+            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
+              {t('settings.emoteQuality')}
+            </legend>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.6rem',
+                cursor: 'pointer'
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={preferences.thirdPartyEmotesEnabled}
+                onChange={(event) => onChange({ thirdPartyEmotesEnabled: event.target.checked })}
+                style={{ marginTop: '0.3rem', accentColor: '#9146ff' }}
+              />
+              <span>{t('settings.thirdPartyEmotesEnabled')}</span>
+            </label>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
+              {t('settings.thirdPartyEmotesHelp')}
+            </p>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.6rem',
+                cursor: preferences.thirdPartyEmotesEnabled ? 'pointer' : 'not-allowed',
+                opacity: preferences.thirdPartyEmotesEnabled ? 1 : 0.55
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={preferences.emoteBestQuality}
+                disabled={!preferences.thirdPartyEmotesEnabled}
+                onChange={(event) => onChange({ emoteBestQuality: event.target.checked })}
+                style={{ marginTop: '0.3rem', accentColor: '#9146ff' }}
+              />
+              <span>{t('settings.emoteBestQuality')}</span>
+            </label>
+            <label
+              style={{
+                ...fieldStyle,
+                opacity:
+                  !preferences.thirdPartyEmotesEnabled || preferences.emoteBestQuality ? 0.55 : 1
+              }}
+            >
+              <span>{t('settings.emoteImageScale')}</span>
+              <select
+                value={preferences.emoteImageScale}
+                disabled={!preferences.thirdPartyEmotesEnabled || preferences.emoteBestQuality}
+                onChange={(event) => {
+                  const scale = event.currentTarget.value
+                  if (scale === '1x' || scale === '3x' || scale === '4x') {
+                    onChange({ emoteImageScale: scale })
+                  }
+                }}
+                style={{
+                  padding: '0.55rem',
+                  border: '1px solid #52525b',
+                  borderRadius: '6px',
+                  background: '#27272a',
+                  color: '#fff'
+                }}
+              >
+                <option value="1x">x1</option>
+                <option value="3x">x3</option>
+                <option value="4x">x4</option>
+              </select>
+            </label>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
+              {t('settings.emoteQualityCacheHint')}
+            </p>
           </fieldset>
 
           <fieldset
