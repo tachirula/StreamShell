@@ -1,48 +1,132 @@
-# StreamShell Documentation & Research
+# Research and technical references
 
-This document serves as the research log, tracking official documentation, technical decisions, and API references used to build StreamShell.
+This document records the external protocols and implementation decisions used
+by StreamShell. For an overview of how these pieces fit together, see the
+[architecture index](./README.md).
 
-## 1. Twitch Developer (Chat & APIs)
-- **Twitch IRC (WebSockets):** Standard protocol for reading live chat and parsing tags. [Official Docs](https://dev.twitch.tv/docs/irc/)
-- **IRC Tags Reference:** Every chat message carries metadata (badges, color, display-name, emotes, ...). [Tags Reference](https://dev.twitch.tv/docs/irc/tags/)
-- **Twitch EventSub:** Recommended alternative for advanced event tracking. [EventSub Docs](https://dev.twitch.tv/docs/eventsub/)
-- **Twitch API Reference:** General endpoint reference for Helix. [API Reference](https://dev.twitch.tv/docs/api/reference)
-- **Channel Emotes API:** Used to fetch custom emote URLs and cache them locally. [Emotes Endpoint](https://dev.twitch.tv/docs/api/reference/#get-channel-emotes)
+## Twitch chat and Helix
 
-## 2. GNOME Shell, GJS & GSettings (Configuration & UI)
-- **GJS Documentation Root:** Main entry point for GNOME JavaScript APIs. [GJS Docs](https://gjs-docs.gnome.org/gio20~2.0/)
-- **Gio.Settings API Reference:** Low-level methods for handling extension settings. [Gio.Settings](https://gjs-docs.gnome.org/gio20~2.0/gio.settings)
-- **GSettings Guide (GJS Guide):** Step-by-step documentation on defining XML schemas. [GJS GSettings Guide](https://gjs.guide/guides/gio/gsettings.html)
-- **GTK Settings Reference:** Supplementary styling and configuration references. [GTK Settings](https://gjs.guide/guides/gtk/3/16-settings.html)
+- [Twitch IRC documentation](https://dev.twitch.tv/docs/irc/) describes the
+  WebSocket chat protocol used through `tmi.js`.
+- [IRC tags reference](https://dev.twitch.tv/docs/irc/tags/) documents the
+  message metadata StreamShell consumes, including `display-name`, `color`,
+  `badges`, `emotes`, and reply-related tags.
+- [Twitch API reference](https://dev.twitch.tv/docs/api/reference) covers the
+  Helix endpoints used for user identity and chat badges:
+  - `GET /helix/users` resolves a channel login to its broadcaster ID and
+    profile image.
+  - `GET /helix/chat/badges/global` loads global badge definitions.
+  - `GET /helix/chat/badges?broadcaster_id=...` loads channel badge overrides.
+- [Client credentials grant](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#client-credentials-grant-flow)
+  is the server-to-server token flow. StreamShell uses an app token, not a
+  viewer login or user OAuth grant. Client credentials belong in the local,
+  ignored `electron-app/.env` file; never commit them.
 
-## 3. D-Bus IPC (Real-Time Communication)
-- **Gio.DBusConnection Reference:** Native Linux Inter-Process Communication reference in JavaScript. [Gio.DBusConnection](https://gjs-docs.gnome.org/gio20~2.0/gio.dbusconnection)
-- **GJS D-Bus Guide:** How to export objects and emit signals within GNOME Shell. [GJS D-Bus Guide](https://gjs.guide/guides/gio/dbus.html)
+### IRC emote ranges
 
-## 4. Internationalization (i18n)
-- **MDN — Navigator.language:** Standard used by the renderer to detect the OS locale. [Navigator.language](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/language)
-- **GLib.get_language_names():** Canonical way for GNOME Shell extensions to read the system language. [GLib Reference](https://docs.gtk.org/glib/func.get_language_names.html)
-- **GNU gettext (GJS):** Planned long-term path for the extension once packaged as `.deb`. [GJS gettext Guide](https://gjs.guide/guides/gjs/internationalization.html)
+The IRC `emotes` tag maps Twitch emote IDs to inclusive character ranges in the
+original message. The parser uses Unicode code points (`Array.from`) so these
+ranges remain correct when a message contains astral Unicode characters.
+Twitch emote assets are requested from the CDN as animated or static variants;
+the cache inspects the downloaded bytes to determine the local image extension.
 
-## 5. Twitch Authentication & Helix (Avatar Fetching)
-- **Twitch Developer Console:** Where the OAuth client (Client ID + Client Secret) is created. [Console Apps](https://dev.twitch.tv/console/apps)
-- **Client Credentials Grant:** Server-to-server OAuth flow used to obtain an App Access Token. No user login required. [OAuth Docs](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#client-credentials-grant-flow)
-- **Get Users Endpoint:** Helix endpoint `GET /helix/users` used to fetch `profile_image_url` for a channel. [Get Users](https://dev.twitch.tv/docs/api/reference/#get-users)
-- **Rate Limits:** 800 points/min per client ID for app tokens. Plenty for our on-demand avatar lookups. [Rate Limits](https://dev.twitch.tv/docs/api/guide/#rate-limits)
-- **dotenv:** Node library used to load `.env` files into `process.env` without hardcoding secrets. [dotenv](https://github.com/motdotla/dotenv)
+## Third-party emote catalogs
 
-## 6. Chat Assets — Badges and Emotes
+Third-party emotes are plain text in IRC messages, so StreamShell loads a
+channel catalog and performs a word-based second pass after parsing Twitch's
+position-tagged emotes.
 
-### Badges
-- **Get Global Chat Badges:** `GET /helix/chat/badges/global` — the authoritative badge list for the platform. [Endpoint](https://dev.twitch.tv/docs/api/reference/#get-global-chat-badges)
-- **Get Channel Chat Badges:** `GET /helix/chat/badges?broadcaster_id={id}` — per-channel override for shared set_ids (subscriber tiers, etc.). [Endpoint](https://dev.twitch.tv/docs/api/reference/#get-channel-chat-badges)
-- **Badge Tag Format:** The IRC `badges` tag only carries ids (`moderator/1`, `subscriber/12`); the images come from Helix. Documented in the IRC Tags Reference above.
+- **BetterTTV:** channel/shared catalog endpoint
+  `https://api.betterttv.net/3/cached/users/twitch/{broadcasterId}` and image
+  CDN `https://cdn.betterttv.net/emote/{emoteId}/{scale}x`.
+- **FrankerFaceZ:** room endpoint
+  `https://api.frankerfacez.com/v1/room/id/{broadcasterId}`. The service may
+  return protocol-relative image paths.
+- **7TV:** Twitch-user endpoint
+  `https://7tv.io/v3/users/twitch/{broadcasterId}` and image CDN
+  `https://cdn.7tv.app/emote/{emoteId}/{scale}x.webp`.
 
-### Emotes
-- **Emote CDN URL Scheme:** `https://static-cdn.jtvnw.net/emoticons/v2/<id>/<format>/dark/<scale>` where format is `static` (PNG) or `animated` (GIF). This is the canonical way to build an emote URL from the id in the IRC `emotes` tag. Not formally documented as a public API, but stable and used by every third-party client.
-- **IRC `emotes` tag format:** `emote_id:start-end,start-end/emote_id:...`. **Ranges are Unicode code points, not UTF-16 units** — a single emoji occupies 1 code point but 2 UTF-16 units. This is the source of the "why Array.from, not substring" comment in `chat-segments.ts`.
+The catalogs are held in process memory and scoped to the active channel.
+Third-party support is an explicit preference and is enabled by default. When
+disabled, these codes are left as ordinary text. Catalog requests are
+independent and run concurrently; failures are logged and do not prevent the
+Twitch connection. Startup message processing waits for the catalog-loading
+task to settle, and a failed provider simply contributes no matches.
+Each catalog request has a 15-second timeout.
 
-### Animated GIF decoding inside GNOME Shell
-- **GdkPixbuf.PixbufAnimation:** Decodes animated GIFs frame by frame. [GdkPixbuf Reference](https://docs.gtk.org/gdk-pixbuf/class.PixbufAnimation.html)
-- **Cairo.ImageSurface / Cairo.Context:** Where each frame is uploaded so multiple actors can share the same bitmap. [Cairo API](https://www.cairographics.org/manual/)
-- **GLib.timeout_add:** Single source timer used by the animator instead of one timer per emote. [GLib Main Loop](https://docs.gtk.org/glib/main-loop.html)
+The image downloader also supports WebP, used by 7TV, in addition to PNG and
+GIF. Availability and exact image variants are controlled by each provider's
+current API/CDN behavior; these endpoints are external dependencies rather
+than a stability guarantee from Twitch.
+
+## Image download and cache policy
+
+- The Electron downloader uses a FIFO queue and a configurable worker count.
+  The preference defaults to four workers and accepts 1–16. Requests for the
+  same URL share one in-flight promise. There is no separate fairness policy
+  beyond FIFO admission.
+- The 30-second abort is an **idle timeout**, not a total deadline. It starts
+  before the request and resets when the response arrives and as non-empty
+  response chunks are received. There is no hard total-duration or byte-size
+  limit in the downloader.
+- Cache filenames use the first 20 hexadecimal characters of SHA-1(URL), with
+  the extension detected from the bytes (`gif`, `webp`, or fallback `png`).
+  Files are written to a PID-suffixed temporary path and renamed into place.
+- Only a Twitch animated-emote 404 is negatively cached (`noanim-<id>`).
+  Other image failures, including timeouts, remain retryable.
+- Clearing the image cache is rejected while a Twitch channel is active. Once
+  disconnected, the clear operation waits for in-flight work before removing
+  files and in-memory indexes.
+
+## GNOME Shell, GJS, and GSettings
+
+- [GJS documentation](https://gjs.guide/) and the
+  [GNOME Shell extension guide](https://gjs.guide/extensions/) cover extension
+  lifecycle and Shell APIs.
+- [GSettings guide](https://gjs.guide/guides/gio/gsettings.html) describes
+  schema definitions, compilation, and live settings.
+- [Gio.Settings API](https://docs.gtk.org/gio/class.Settings.html) is the
+  settings API used by the extension to observe animation and shortcut
+  preferences.
+- [GdkPixbuf.PixbufAnimation](https://docs.gtk.org/gdk-pixbuf/class.PixbufAnimation.html)
+  decodes animated image frames.
+- [Cairo](https://www.cairographics.org/manual/) surfaces provide the shared
+  frame buffers painted by the animation actors.
+- [GLib main loop](https://docs.gtk.org/glib/main-loop.html) provides the
+  animator's shared tick source.
+
+The extension is loaded into GNOME Shell and therefore runs on the compositor
+main thread. The animator shares frame data by emote, uses one timer, caps
+distinct active animations, and pauses while the overlay is not in a state
+where animation should advance.
+
+## D-Bus and process communication
+
+- [GJS D-Bus guide](https://gjs.guide/guides/gio/dbus.html) explains exported
+  names, signals, and subscriptions.
+- [D-Bus specification](https://dbus.freedesktop.org/doc/dbus-specification.html)
+  defines the session bus and signal model.
+- [`dbus-next`](https://github.com/dbusjs/node-dbus-next) is the Node library
+  used by Electron main to own the StreamShell session-bus name and emit
+  signals.
+
+Chat messages and overlay settings travel from Electron main to the extension
+as D-Bus signals. Renderer requests instead cross the Electron preload bridge
+using IPC. GSettings is owned and consumed by GNOME; Electron does not write
+the extension's GSettings values directly.
+
+## Electron and renderer
+
+- [Electron process model](https://www.electronjs.org/docs/latest/tutorial/process-model)
+  describes the main/renderer separation.
+- [Electron context isolation](https://www.electronjs.org/docs/latest/tutorial/context-isolation)
+  explains the narrow preload API boundary.
+- [Vite](https://vite.dev/guide/) and [electron-vite](https://electron-vite.org/)
+  provide the development/build workflow.
+- [MDN `Navigator.language`](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/language)
+  documents the locale source used by the renderer.
+- [GLib `get_language_names`](https://docs.gtk.org/glib/func.get_language_names.html)
+  documents the locale source used by the extension.
+
+The renderer and extension maintain separate translation dictionaries because
+they execute in separate processes and use different locale sources.
