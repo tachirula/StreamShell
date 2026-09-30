@@ -5,5 +5,10 @@
       <default>0.35</default>
       <summary>Opacity of the overlay background</summary>
     </key>
+    <key name="animated-emotes" type="b">
+      <default>true</default>
+      <summary>Animate emotes</summary>
+      <description>Play animated emotes in the overlay. Turn off to show still frames.</description>
+    </key>
   </schema>
 </schemalist>
