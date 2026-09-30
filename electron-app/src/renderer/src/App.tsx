@@ -1,5 +1,6 @@
 import { useState, useEffect, type ReactElement } from 'react'
 import twitchLogo from './assets/twitch-logo.png'
+import { t } from './i18n'
 
 // --- SVGs Integrados ---
 const LoadingIcon = () => (
@@ -18,11 +19,16 @@ const CancelIcon = () => (
 
 type Status = 'idle' | 'connecting' | 'connected' | 'error'
 
+interface GnomeWarningView {
+  key: string
+  params?: Record<string, string>
+}
+
 function App(): ReactElement {
   const [channel, setChannel] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [gnomeWarnings, setGnomeWarnings] = useState<string[]>([])
+  const [gnomeWarnings, setGnomeWarnings] = useState<GnomeWarningView[]>([])
   const [warningsDismissed, setWarningsDismissed] = useState(false)
 
   // Suscripción a los eventos REALES del backend
@@ -119,7 +125,7 @@ function App(): ReactElement {
         <img src={twitchLogo} alt="Twitch Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
         <h1 style={{ color: '#bf94ff', margin: 0 }}>StreamShell</h1>
       </div>
-      <p style={{ color: '#adadb8', marginTop: 0 }}>Panel de Control del Overlay</p>
+      <p style={{ color: '#adadb8', marginTop: 0 }}>{t('panel.subtitle')}</p>
 
       {gnomeWarnings.length > 0 && !warningsDismissed && (
         <div
@@ -139,9 +145,11 @@ function App(): ReactElement {
           }}
         >
           <div style={{ flex: 1 }}>
-            <strong style={{ color: '#f59e0b' }}>Aviso de GNOME Shell</strong>
+            <strong style={{ color: '#f59e0b' }}>{t('gnome.warningTitle')}</strong>
             {gnomeWarnings.map((w, i) => (
-              <div key={i} style={{ marginTop: '4px', color: '#e0e0e0' }}>{w}</div>
+              <div key={i} style={{ marginTop: '4px', color: '#e0e0e0' }}>
+                {t(`gnome.warn.${w.key}`, w.params)}
+              </div>
             ))}
           </div>
           <button
@@ -155,7 +163,7 @@ function App(): ReactElement {
               padding: 0,
               lineHeight: 1
             }}
-            aria-label="Cerrar aviso"
+            aria-label={t('gnome.dismiss')}
           >
             ✕
           </button>
@@ -163,12 +171,12 @@ function App(): ReactElement {
       )}
 
       <div style={{ marginTop: '2.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', width: '350px', maxWidth: '100%' }}>
-        <label htmlFor="channel" style={{ fontWeight: '600' }}>Canal de Twitch:</label>
+        <label htmlFor="channel" style={{ fontWeight: '600' }}>{t('panel.channelLabel')}</label>
 
         <input
           id="channel"
           type="text"
-          placeholder="Ej: hashiruta"
+          placeholder={t('panel.channelPlaceholder')}
           value={channel}
           disabled={status !== 'idle' && status !== 'error'}
           onChange={(e) => setChannel(e.target.value)}
@@ -205,18 +213,18 @@ function App(): ReactElement {
             boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
           }}
         >
-          {status === 'idle' && 'Conectar al Chat'}
-          {status === 'error' && 'Reintentar conexión'}
+          {status === 'idle' && t('panel.connect')}
+          {status === 'error' && t('panel.retry')}
           {status === 'connecting' && (
             <>
               <LoadingIcon />
-              Conectando...
+              {t('panel.connecting')}
             </>
           )}
           {status === 'connected' && (
             <>
               <CancelIcon />
-              Cancelar conexión
+              {t('panel.cancel')}
             </>
           )}
         </button>
@@ -233,7 +241,7 @@ function App(): ReactElement {
             animation: 'fadeIn 0.3s ease-in-out'
           }}
         >
-          Estado: Recibiendo mensajes de <strong style={{ color: '#00ff7f' }}>{channel}</strong>
+          {t('panel.status.connected')} <strong style={{ color: '#00ff7f' }}>{channel}</strong>
         </div>
       )}
 
@@ -248,7 +256,7 @@ function App(): ReactElement {
             animation: 'fadeIn 0.3s ease-in-out'
           }}
         >
-          Error al conectar: <strong style={{ color: '#ef4444' }}>{errorMsg}</strong>
+          {t('panel.status.error')} <strong style={{ color: '#ef4444' }}>{errorMsg}</strong>
         </div>
       )}
     </div>
