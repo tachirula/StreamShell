@@ -36,3 +36,40 @@ This document tracks the actual implementation steps, bug fixes, and environment
 
 ### 4.3 Input Width
 - The channel input was previously sized with `maxWidth: 350px`, which shrank and produced a jittery look. Switched to a fixed `width: 350px` with `maxWidth: 100%` fallback.
+
+## 5. Bidirectional IPC — Real Connection Status
+
+### 5.1 Problem
+- `App.tsx` flipped the UI to `connected` via a hardcoded `setTimeout(1200)` right after firing `window.api.setChannel(channel)`. The renderer was never informed by the backend.
+- The main process did emit a log line (`[StreamShell Backend] Conectado exitosamente a: ...`) but that never crossed back over IPC, so failures, slow networks or invalid channels were invisible to the UI.
+
+### 5.2 Design
+A bidirectional IPC bridge built on top of the existing `set-twitch-channel` / `disconnect-twitch` channels:
+
+| Direction | Channel | Payload |
+|---|---|---|
+| renderer → main | `set-twitch-channel` | `string` (channel name) |
+| renderer → main | `disconnect-twitch` | — |
+| main → renderer | `twitch:connected` | `{ channel, addr, port }` |
+| main → renderer | `twitch:error` | `{ message }` |
+| main → renderer | `twitch:disconnected` | `{ reason }` |
+
+### 5.3 Implementation
+- **`src/main/index.ts`**
+  - Promoted `mainWindow` to a module-scoped variable so Twitch event handlers can reach it.
+  - Added `sendToRenderer(channel, payload)` with a `isDestroyed()` guard.
+  - Wired `tmi.js` events: `connected` → `twitch:connected`, `disconnected` → `twitch:disconnected`, and the `.connect().catch()` path → `twitch:error`.
+  - Cleared the `mainWindow` reference on `'closed'` to avoid holding a stale object.
+
+- **`src/preload/index.ts`**
+  - Exposed `onTwitchConnected`, `onTwitchError`, `onTwitchDisconnected`.
+  - Each returns a cleanup function so `useEffect` can unsubscribe on unmount.
+
+- **`src/renderer/src/App.tsx`**
+  - Added a `useEffect` subscribing to the three events with proper cleanup.
+  - Removed the fake `setTimeout(1200)`.
+  - Added an `'error'` status + `errorMsg` state so the actual failure reason surfaces in the UI.
+  - The connect button becomes "Reintentar conexión" when in `'error'`, and the input re-enables so the user can fix the channel name.
+
+### 5.4 Result
+The UI now reflects the true state of the Twitch connection: the panel only says `connected` after `tmi.js` has actually established the WebSocket, and any failure (DNS, invalid channel, auth) is shown inline instead of being silently hidden behind an optimistic timeout.
