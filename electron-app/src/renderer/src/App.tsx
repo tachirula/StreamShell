@@ -1,6 +1,7 @@
-import { useState, useEffect, type ReactElement } from 'react'
+import { useState, useEffect, useRef, type ReactElement } from 'react'
 import twitchLogo from './assets/twitch-logo.png'
 import { t } from './i18n'
+import { getCachedAvatar, setCachedAvatar } from './avatar-cache'
 
 // --- SVGs Integrados ---
 const LoadingIcon = () => (
@@ -30,6 +31,11 @@ function App(): ReactElement {
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [gnomeWarnings, setGnomeWarnings] = useState<GnomeWarningView[]>([])
   const [warningsDismissed, setWarningsDismissed] = useState(false)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+  const [avatarLoading, setAvatarLoading] = useState(false)
+  const [avatarLookupNonce, setAvatarLookupNonce] = useState(0)
+
+  const prevNonceRef = useRef(0)
 
   // Suscripción a los eventos REALES del backend
   useEffect(() => {
@@ -63,8 +69,47 @@ function App(): ReactElement {
     return () => off()
   }, [])
 
+  // Avatar: muestra caché al instante, refresca en background.
+  // - Typing: 2s de debounce si no hay caché; instantáneo si la hay.
+  // - Blur (nonce): forzar refresh inmediato.
+  // - Cambios de status (connecting/connected/error) NO disparan el efecto,
+  //   porque `status` ya no está en las dependencias.
+  useEffect(() => {
+    const clean = channel.trim().toLowerCase()
+    const isForced = avatarLookupNonce !== prevNonceRef.current
+    prevNonceRef.current = avatarLookupNonce
+
+    // Input vacío → limpiamos todo.
+    if (!clean) {
+      setAvatarUrl(null)
+      setAvatarLoading(false)
+      return
+    }
+
+    // 1) Mostrar caché ya, sin flicker.
+    const cached = getCachedAvatar(clean)
+    if (cached !== undefined) {
+      setAvatarUrl(cached)
+      setAvatarLoading(false)
+    } else {
+      setAvatarLoading(true)
+    }
+
+    // 2) Refresh en background. Delay 0 si ya hay algo en pantalla o si
+    //    viene de un blur; 2s solo cuando el usuario está tecleando en frío.
+    const delay = cached !== undefined || isForced ? 0 : 2000
+
+    const timer = setTimeout(async () => {
+      const fresh = await window.api.getStreamerAvatar(clean)
+      setAvatarUrl(fresh)
+      setAvatarLoading(false)
+      setCachedAvatar(clean, fresh)
+    }, delay)
+
+    return () => clearTimeout(timer)
+  }, [channel, avatarLookupNonce])
+
   const handleAction = () => {
-    // Cancelar / desconectar
     if (status !== 'idle') {
       window.api.disconnectChannel()
       setStatus('idle')
@@ -77,12 +122,15 @@ function App(): ReactElement {
 
     setErrorMsg(null)
     setStatus('connecting')
-    window.api.setChannel(cleanChannel)   // el paso a 'connected' lo decide el backend
+    window.api.setChannel(cleanChannel)
   }
 
   const isConnected = status === 'connected' || status === 'connecting'
   const btnColor = isConnected ? '#ef4444' : '#9146FF'
   const btnHoverColor = isConnected ? '#dc2626' : '#772ce8'
+
+  const initial = channel.trim() ? channel.trim()[0].toUpperCase() : '?'
+  const inputDisabled = status !== 'idle' && status !== 'error'
 
   return (
     <div
@@ -95,29 +143,26 @@ function App(): ReactElement {
       }}
     >
       <style>{`
-        /* Animación de clic en el botón */
         .action-btn {
           transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.2s ease;
         }
-        .action-btn:active {
-          transform: scale(0.94);
-        }
-        .action-btn:hover {
-          background-color: ${btnHoverColor} !important;
-        }
+        .action-btn:active { transform: scale(0.94); }
+        .action-btn:hover { background-color: ${btnHoverColor} !important; }
 
-        /* Animación de rotación para el SVG de carga */
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        .spin-anim {
-          animation: spin 1s linear infinite;
-        }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .spin-anim { animation: spin 1s linear infinite; }
 
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(-4px); }
           to   { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulse {
+          0%, 100% { opacity: 0.6; }
+          50%      { opacity: 1; }
+        }
+        .avatar-loading {
+          animation: pulse 1.2s ease-in-out infinite;
         }
       `}</style>
 
@@ -173,25 +218,67 @@ function App(): ReactElement {
       <div style={{ marginTop: '2.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', width: '350px', maxWidth: '100%' }}>
         <label htmlFor="channel" style={{ fontWeight: '600' }}>{t('panel.channelLabel')}</label>
 
-        <input
-          id="channel"
-          type="text"
-          placeholder={t('panel.channelPlaceholder')}
-          value={channel}
-          disabled={status !== 'idle' && status !== 'error'}
-          onChange={(e) => setChannel(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleAction()}
-          style={{
-            padding: '0.75rem',
-            borderRadius: '6px',
-            border: '2px solid #3f3f46',
-            background: (status !== 'idle' && status !== 'error') ? '#27272a' : '#0e0e10',
-            color: (status !== 'idle' && status !== 'error') ? '#a1a1aa' : '#fff',
-            fontSize: '1rem',
-            outline: 'none',
-            transition: 'all 0.2s ease'
-          }}
-        />
+        <div style={{ display: 'flex', alignItems: 'stretch', gap: '10px' }}>
+          <div
+            aria-hidden="true"
+            style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              background: '#0e0e10',
+              border: `2px solid ${avatarUrl ? '#9146FF' : '#3f3f46'}`,
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'border-color 0.2s ease'
+            }}
+          >
+            {avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt=""
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              />
+            ) : (
+              <span
+                className={avatarLoading ? 'avatar-loading' : ''}
+                style={{
+                  color: channel.trim() ? '#bf94ff' : '#52525b',
+                  fontSize: '1.15rem',
+                  fontWeight: 'bold',
+                  userSelect: 'none'
+                }}
+              >
+                {initial}
+              </span>
+            )}
+          </div>
+
+          <input
+            id="channel"
+            type="text"
+            placeholder={t('panel.channelPlaceholder')}
+            value={channel}
+            disabled={inputDisabled}
+            onChange={(e) => setChannel(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAction()}
+            onBlur={() => setAvatarLookupNonce((n) => n + 1)}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              padding: '0.75rem',
+              borderRadius: '6px',
+              border: '2px solid #3f3f46',
+              background: inputDisabled ? '#27272a' : '#0e0e10',
+              color: inputDisabled ? '#a1a1aa' : '#fff',
+              fontSize: '1rem',
+              outline: 'none',
+              transition: 'all 0.2s ease'
+            }}
+          />
+        </div>
 
         <button
           className="action-btn"
