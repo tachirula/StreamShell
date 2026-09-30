@@ -1,4 +1,4 @@
-import { cacheImage, twitchEmoteUrl } from './emote-cache'
+import { cacheEmote } from './emote-cache'
 
 // Splits a chat message into text and emote segments using the `emotes` tag
 // that Twitch attaches to every IRC message. No dictionary needed: the tag
@@ -69,7 +69,7 @@ export async function buildSegments(
   const paths = new Map<string, string | null>()
   await Promise.all(
     uniqueIds.map(async (id) => {
-      paths.set(id, await cacheImage(twitchEmoteUrl(id)))
+      paths.set(id, await cacheEmote(id))
     })
   )
 
