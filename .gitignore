@@ -1,2 +1,3 @@
 gnome-extension/schemas/gschemas.compiled
 *.bak
+.env
