@@ -3,6 +3,14 @@ import './load-env'
 import { getStreamerAvatar, getUserInfo } from './twitch-api'
 import { preloadBadges, resolveBadges } from './twitch-badges'
 import { buildSegments, type Segment } from './chat-segments'
+import { clearImageCache } from './emote-cache'
+import {
+  DEFAULT_PREFERENCES,
+  loadPreferences,
+  savePreferences,
+  validatePreferences,
+  type AppPreferences
+} from './preferences'
 
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
@@ -23,15 +31,29 @@ if (process.platform === 'linux') {
 }
 
 class StreamShellInterface extends dbus.interface.Interface {
-  constructor(name: string) { super(name) }
-  MessageReceived(user: string, color: string, text: string) { return [user, color, text] }
-  ChatCleared() { return [] }
+  constructor(name: string) {
+    super(name)
+  }
+  MessageReceived(user: string, color: string, text: string) {
+    return [user, color, text]
+  }
+  HistoryMessageReceived(user: string, color: string, text: string) {
+    return [user, color, text]
+  }
+  ChatCleared() {
+    return []
+  }
+  OverlaySettingsChanged(settings: string) {
+    return settings
+  }
 }
 
 StreamShellInterface.configureMembers({
   signals: {
     MessageReceived: { signature: 'sss', names: ['user', 'color', 'text'] },
-    ChatCleared: { signature: '', names: [] }
+    HistoryMessageReceived: { signature: 'sss', names: ['user', 'color', 'text'] },
+    ChatCleared: { signature: '', names: [] },
+    OverlaySettingsChanged: { signature: 's', names: ['settings'] }
   }
 })
 
@@ -42,6 +64,17 @@ let joinTimeout: NodeJS.Timeout | null = null
 let broadcasterId: string | null = null
 let messageChain: Promise<void> = Promise.resolve()
 let pendingGnomeStatus: GnomeCheckResult | null = null
+let preferences: AppPreferences = DEFAULT_PREFERENCES
+let activeChannel: string | null = null
+let preferenceRevision = 0
+const chatHistory: {
+  user: string
+  color: string
+  text: string
+  badges: string[]
+  emotes: Record<string, string[]> | null
+}[] = []
+const MAX_STORED_HISTORY = 500
 
 const REPO_EXTENSION_PATH = resolveRepoExtensionPath()
 
@@ -66,6 +99,45 @@ function notifyOverlayClear(): void {
   if (chatInterface) chatInterface.ChatCleared()
 }
 
+async function publishPreferences(): Promise<void> {
+  const revision = ++preferenceRevision
+  const queued = messageChain.then(async () => {
+    if (revision !== preferenceRevision) return
+    const shouldReplayHistory = preferences.historyEnabled && activeChannel !== null
+    const history = shouldReplayHistory ? chatHistory.slice(-preferences.historyLimit) : []
+    const replay: { user: string; color: string; payload: string }[] = []
+    for (const message of history) {
+      if (revision !== preferenceRevision) return
+      const segments = await buildSegments(message.text, message.emotes, { animated: false })
+      replay.push({
+        user: message.user,
+        color: message.color,
+        payload: JSON.stringify({ badges: message.badges, segments })
+      })
+    }
+
+    if (revision !== preferenceRevision || !chatInterface) return
+    chatInterface.OverlaySettingsChanged(
+      JSON.stringify({
+        chatWidth: preferences.chatWidth,
+        maxVisibleMessages: preferences.maxVisibleMessages,
+        historyEnabled: preferences.historyEnabled,
+        historyLimit: preferences.historyLimit
+      })
+    )
+    if (shouldReplayHistory) {
+      chatInterface.ChatCleared()
+      for (const message of replay) {
+        chatInterface.HistoryMessageReceived(message.user, message.color, message.payload)
+      }
+    }
+  })
+  messageChain = queued.catch((err) => {
+    console.error('[StreamShell Backend] Failed to publish overlay preferences:', err)
+  })
+  await messageChain
+}
+
 function clearJoinTimeout(): void {
   if (joinTimeout) {
     clearTimeout(joinTimeout)
@@ -75,6 +147,7 @@ function clearJoinTimeout(): void {
 
 function teardownTwitchClient(): void {
   clearJoinTimeout()
+  activeChannel = null
   if (twitchClient) {
     twitchClient.disconnect().catch(console.error)
     twitchClient = null
@@ -83,6 +156,8 @@ function teardownTwitchClient(): void {
 
 function connectToTwitch(channel: string): void {
   teardownTwitchClient()
+  activeChannel = channel
+  chatHistory.length = 0
 
   // Empezamos una sesión nueva: pedimos al overlay que borre los
   // mensajes anteriores y muestre de nuevo el placeholder.
@@ -123,6 +198,7 @@ function connectToTwitch(channel: string): void {
 
   twitchClient.on('disconnected', (reason: string) => {
     clearJoinTimeout()
+    activeChannel = null
     console.log(`[StreamShell Backend] Desconectado: ${reason}`)
     sendToRenderer('twitch:disconnected', { reason })
   })
@@ -144,6 +220,19 @@ function connectToTwitch(channel: string): void {
           ])
         } catch (err) {
           console.warn('[StreamShell Backend] could not resolve message assets:', err)
+        }
+        const emotes =
+          tags.emotes && typeof tags.emotes === 'object'
+            ? Object.fromEntries(
+                Object.entries(tags.emotes as Record<string, string[]>).map(([id, positions]) => [
+                  id,
+                  [...positions]
+                ])
+              )
+            : null
+        if (activeChannel) {
+          chatHistory.push({ user, color, text, badges, emotes })
+          if (chatHistory.length > MAX_STORED_HISTORY) chatHistory.shift()
         }
         if (chatInterface) {
           chatInterface.MessageReceived(user, color, JSON.stringify({ badges, segments }))
@@ -176,7 +265,9 @@ function createWindow(): void {
 
   mainWindow.setBackgroundColor('#18181b')
   mainWindow.on('ready-to-show', () => mainWindow?.show())
-  mainWindow.on('closed', () => { mainWindow = null })
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
 
   mainWindow.webContents.on('did-finish-load', () => {
     if (pendingGnomeStatus) {
@@ -200,12 +291,35 @@ app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.electron')
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
+  preferences = await loadPreferences()
+
   ipcMain.on('set-twitch-channel', (_event, channel: string) => connectToTwitch(channel))
 
   ipcMain.on('disconnect-twitch', () => {
     console.log('[StreamShell Backend] Desconectado por el usuario')
     teardownTwitchClient()
     notifyOverlayClear()
+  })
+
+  ipcMain.handle('preferences:get', async () => {
+    await publishPreferences()
+    return preferences
+  })
+
+  ipcMain.handle('preferences:set', async (_event, value: unknown) => {
+    const next = validatePreferences(value)
+    await savePreferences(next)
+    preferences = next
+    await publishPreferences()
+    return preferences
+  })
+
+  ipcMain.handle('cache:clear', async () => {
+    if (activeChannel) {
+      throw new Error('Disconnect from Twitch before clearing the image cache')
+    }
+    await clearImageCache()
+    return true
   })
 
   ipcMain.handle('get-streamer-avatar', async (_event, channel: string) => {
@@ -228,7 +342,11 @@ app.whenReady().then(async () => {
 
   createWindow()
 
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
 })
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit()
+})
