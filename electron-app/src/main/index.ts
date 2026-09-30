@@ -21,6 +21,7 @@ StreamShellInterface.configureMembers({
 
 let chatInterface: any = null
 let twitchClient: any = null
+let mainWindow: BrowserWindow | null = null
 
 async function initDBus() {
   try {
@@ -33,34 +34,51 @@ async function initDBus() {
   }
 }
 
+function sendToRenderer(channel: string, payload?: unknown): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload)
+  }
+}
+
 function connectToTwitch(channel: string): void {
   if (twitchClient) {
     twitchClient.disconnect().catch(console.error)
+    twitchClient = null
   }
+
   twitchClient = new tmi.Client({ channels: [channel] })
 
-  twitchClient.on('connected', (addr, port) => {
+  twitchClient.on('connected', (addr: string, port: number) => {
     console.log(`[StreamShell Backend] Conectado exitosamente a: ${channel} (${addr}:${port})`)
+    sendToRenderer('twitch:connected', { channel, addr, port })
   })
 
-  twitchClient.connect().catch(console.error)
+  twitchClient.on('disconnected', (reason: string) => {
+    console.log(`[StreamShell Backend] Desconectado: ${reason}`)
+    sendToRenderer('twitch:disconnected', { reason })
+  })
 
-  twitchClient.on('message', (_channel, tags, message, self) => {
+  twitchClient.on('message', (_channel: string, tags: any, message: string, self: boolean) => {
     if (self) return
     const user = String(tags['display-name'] || tags.username || 'unknown')
     const color = String(tags.color || '#8A2BE2')
     const text = String(message)
     if (chatInterface) chatInterface.MessageReceived(user, color, text)
   })
+
+  twitchClient.connect().catch((err: Error) => {
+    console.error('[StreamShell Backend] Error de conexión:', err)
+    sendToRenderer('twitch:error', { message: err?.message ?? String(err) })
+  })
 }
 
 function createWindow(): void {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 600,
     height: 750,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#18181b',   // 👈 ESTA LÍNEA elimina la franja blanca
+    backgroundColor: '#18181b',
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -68,10 +86,9 @@ function createWindow(): void {
     }
   })
 
-  // Refuerzo: por si el SO pinta algo antes del primer frame
   mainWindow.setBackgroundColor('#18181b')
-
-  mainWindow.on('ready-to-show', () => mainWindow.show())
+  mainWindow.on('ready-to-show', () => mainWindow?.show())
+  mainWindow.on('closed', () => { mainWindow = null })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -89,7 +106,7 @@ app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.electron')
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
-  ipcMain.on('set-twitch-channel', (event, channel) => connectToTwitch(channel))
+  ipcMain.on('set-twitch-channel', (_event, channel: string) => connectToTwitch(channel))
 
   ipcMain.on('disconnect-twitch', () => {
     if (twitchClient) {
