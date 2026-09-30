@@ -22,3 +22,10 @@ This document serves as the research log, tracking official documentation, techn
 - **MDN — Navigator.language:** Standard used by the renderer to detect the OS locale. [Navigator.language](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/language)
 - **GLib.get_language_names():** Canonical way for GNOME Shell extensions to read the system language. [GLib Reference](https://docs.gtk.org/glib/func.get_language_names.html)
 - **GNU gettext (GJS):** Planned long-term path for the extension once packaged as `.deb`. [GJS gettext Guide](https://gjs.guide/guides/gjs/internationalization.html)
+
+## 5. Twitch Authentication & Helix (Avatar Fetching)
+- **Twitch Developer Console:** Where the OAuth client (Client ID + Client Secret) is created. [Console Apps](https://dev.twitch.tv/console/apps)
+- **Client Credentials Grant:** Server-to-server OAuth flow used to obtain an App Access Token. No user login required. [OAuth Docs](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#client-credentials-grant-flow)
+- **Get Users Endpoint:** Helix endpoint `GET /helix/users` used to fetch `profile_image_url` for a channel. [Get Users](https://dev.twitch.tv/docs/api/reference/#get-users)
+- **Rate Limits:** 800 points/min per client ID for app tokens. Plenty for our on-demand avatar lookups. [Rate Limits](https://dev.twitch.tv/docs/api/guide/#rate-limits)
+- **dotenv:** Node library used to load `.env` files into `process.env` without hardcoding secrets. [dotenv](https://github.com/motdotla/dotenv)
