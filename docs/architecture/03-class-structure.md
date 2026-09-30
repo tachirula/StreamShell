@@ -1,3 +1,4 @@
+````markdown
 # Runtime roles and message data model
 
 The earlier diagram implied an inheritance hierarchy and a D-Bus proxy class
@@ -10,40 +11,40 @@ a TypeScript class.
 classDiagram
     namespace ElectronMain {
         class MainProcess {
+            <<process>>
             +connectToTwitch(channel)
             +handleDisconnect()
             +emitOverlaySignal()
         }
-        <<process>> MainProcess
         class TwitchAPI {
+            <<module>>
             +getUserInfo(channel)
             +getStreamerAvatar(channel)
         }
-        <<module>> TwitchAPI
         class BadgeResolver {
+            <<module>>
             +preloadBadges(broadcasterId)
             +resolveBadges(tags, broadcasterId)
         }
-        <<module>> BadgeResolver
         class ThirdPartyCatalog {
+            <<module>>
             +loadThirdPartyEmotes(channel)
             +getThirdPartyEmote(code)
         }
-        <<module>> ThirdPartyCatalog
         class SegmentBuilder {
+            <<module>>
             +buildSegments(message, emotes, options)
         }
-        <<module>> SegmentBuilder
         class ImageCache {
+            <<module>>
             +cacheImage(url)
             +cacheEmote(id, mode)
         }
-        <<module>> ImageCache
         class PreferencesStore {
+            <<module>>
             +loadPreferences()
             +savePreferences()
         }
-        <<module>> PreferencesStore
     }
 
     namespace MessagePayload {
@@ -57,15 +58,15 @@ classDiagram
             +segments: Segment[]
         }
         class Segment {
+            <<union>>
             +t: string
         }
-        <<union>> Segment
         class TextSegment {
-            +t: "text"
+            +t: text
             +v: string
         }
         class EmoteSegment {
-            +t: "emote"
+            +t: emote
             +path: string
             +name: string
         }
@@ -77,18 +78,18 @@ classDiagram
 
     namespace GnomeExtension {
         class ChatOverlay {
+            <<process role>>
             +receiveMessage()
             +renderHistory()
             +toggleVisibility()
         }
-        <<process role>> ChatOverlay
         class EmoteAnimator {
+            <<module>>
             +registerActor()
             +setPaused()
             +setEnabled()
             +destroy()
         }
-        <<module>> EmoteAnimator
     }
 
     MainProcess --> TwitchAPI : resolves user identity
@@ -127,3 +128,4 @@ metadata. The class view uses the implementation's conceptual contract fields;
 it does not imply a separate runtime `MessageEnvelope` class. Do not treat the
 JSON as a generic Pango markup string: the extension creates actors from
 validated local paths and text values.
+````
