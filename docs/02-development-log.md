@@ -6,7 +6,7 @@ This document tracks the actual implementation steps, bug fixes, and environment
 - Scaffolded the backend using `electron-vite` (React + TypeScript).
 - **Bug Fix (Linux Sandbox):** Addressed the SUID sandbox crash (`setuid_sandbox_host.cc:166`) on Ubuntu by injecting `app.commandLine.appendSwitch('no-sandbox')` for Linux platforms before app initialization.
 - **Twitch Integration:** Implemented `tmi.js` using the CommonJS require syntax (`const tmi = require('tmi.js')`) to bypass Vite's ESM resolution issues.
-- **Milestone:** Successfully connected to a live high-traffic channel (e.g., `juansguarnizo`) and verified real-time chat data flowing into the Node.js console.
+- **Milestone:** Successfully connected to a live high-traffic channel (e.g., `hashiruta`) and verified real-time chat data flowing into the Node.js console.
 
 ## 2. GNOME Extension Configurations
 - **GSettings Implementation:** Defined and compiled the local schema (`org.gnome.shell.extensions.chat-overlay.gschema.xml`).
