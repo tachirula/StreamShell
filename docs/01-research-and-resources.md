@@ -90,15 +90,22 @@ than a stability guarantee from Twitch.
   preferences.
 - [GdkPixbuf.PixbufAnimation](https://docs.gtk.org/gdk-pixbuf/class.PixbufAnimation.html)
   decodes animated image frames.
-- [Cairo](https://www.cairographics.org/manual/) surfaces provide the shared
-  frame buffers painted by the animation actors.
+- GdkPixbuf `get_pixels()` exposes frame data as a byte array accepted by
+  Cogl's introspected upload methods.
+- [Cogl pixel formats](https://mutter.gnome.org/cogl/enum.PixelFormat.html)
+  define the byte ordering used to transfer RGB/RGBA data.
+- [Clutter actor content scaling filters](https://mutter.gnome.org/clutter/method.Actor.set_content_scaling_filters.html)
+  control how the shared image is sampled by actors.
 - [GLib main loop](https://docs.gtk.org/glib/main-loop.html) provides the
   animator's shared tick source.
 
 The extension is loaded into GNOME Shell and therefore runs on the compositor
-main thread. The animator shares frame data by emote, uses one timer, caps
-distinct active animations, and pauses while the overlay is not in a state
-where animation should advance.
+main thread. For each distinct emote, the animator shares one `Cogl.Texture2D`
+through `Clutter.TextureContent`, updates its data with GdkPixbuf-scaled frame
+bytes, and invalidates the content so actors repaint. The GPU draws the image;
+JavaScript does not loop over individual pixels. One timer, a cap on distinct
+active animations, and pause gates bound runtime work. API introspection and
+syntax checks do not replace testing inside the target GNOME Shell session.
 
 ## D-Bus and process communication
 

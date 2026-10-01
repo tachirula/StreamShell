@@ -117,8 +117,11 @@ Overview restores the applicable waiting/live/history view.
 ## UML state machine: animated emote scheduler
 
 The extension's animator is a resource scheduler, not a per-image timer. A
-single GLib source advances shared decoded animations; gates pause work when
-animation should not be visible or consumed.
+single GLib source advances shared decoded animations. GdkPixbuf scales each
+frame natively and uploads it to a shared per-emote `Cogl.Texture2D`, exposed
+to actors through `Clutter.TextureContent`. After each upload, the content is
+invalidated so Clutter repaints actors using the updated texture. Gates pause
+work when animation should not be visible or consumed.
 
 ```mermaid
 stateDiagram-v2
@@ -141,4 +144,3 @@ stateDiagram-v2
 If the animator cannot load or a specific asset is unsupported, the extension
 still renders a static icon where possible. The `Unavailable` state does not
 disable chat rendering.
-

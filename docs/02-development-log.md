@@ -81,14 +81,21 @@ the compositor process.
   configured history limit. Scrolling to older messages pauses animation; a
   control returns to the latest messages. History is not persisted across app
   restarts.
-- The animator decodes GIFs using GdkPixbuf and paints shared Cairo surfaces.
-  One GLib tick services active animations, repeated instances of an emote
-  share decoded state, and the number of distinct animated emotes is bounded.
+- The animator decodes GIF frames with GdkPixbuf, scales them natively, then
+  uploads each distinct emote's frame into a shared `Cogl.Texture2D`, exposed
+  to actors through `Clutter.TextureContent`. Frame changes update the texture
+  and invalidate its content to request a repaint. There are no per-pixel
+  JavaScript loops, Cairo surfaces, or `St.DrawingArea` repaint callbacks. One
+  GLib tick services active animations, and the number of distinct animated
+  emotes is bounded.
 - Animation pauses when the backend is unavailable, the GNOME Activities
   Overview is showing, the user has hidden the overlay, or chat history is
   being browsed. Visibility transitions synchronize the timer so returning to
   the desktop does not permanently freeze animations.
 - Animated emotes can be disabled through the extension's GSettings key.
+- The frame texture height follows `EMOTE_SIZE` multiplied by the GNOME Shell
+  scale factor. The Clutter/Cogl upload path is syntax-checked but still needs
+  visual/runtime validation in a GNOME Shell 50 session.
 
 ## Preferences and global visibility shortcut
 
