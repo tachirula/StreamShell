@@ -5,6 +5,7 @@ import { MAX_CONCURRENT_IMAGE_DOWNLOADS } from '../shared/settings-constraints'
 
 export interface AppPreferences {
   chatWidth: number
+  backgroundOpacity: number
   maxVisibleMessages: number
   historyEnabled: boolean
   historyLimit: number
@@ -17,6 +18,7 @@ export interface AppPreferences {
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
   chatWidth: 360,
+  backgroundOpacity: 35,
   maxVisibleMessages: 10,
   historyEnabled: false,
   historyLimit: 20,
@@ -40,6 +42,14 @@ export function validatePreferences(value: unknown): AppPreferences {
     candidate.chatWidth! > 600
   ) {
     throw new Error('Chat width must be between 280 and 600 pixels')
+  }
+  const backgroundOpacity = candidate.backgroundOpacity ?? DEFAULT_PREFERENCES.backgroundOpacity
+  if (
+    !Number.isInteger(backgroundOpacity) ||
+    backgroundOpacity < 0 ||
+    backgroundOpacity > 100
+  ) {
+    throw new Error('Background opacity must be between 0 and 100 percent')
   }
   if (
     !Number.isInteger(candidate.maxVisibleMessages) ||
@@ -91,6 +101,7 @@ export function validatePreferences(value: unknown): AppPreferences {
   }
   return {
     chatWidth: candidate.chatWidth!,
+    backgroundOpacity,
     maxVisibleMessages: Math.min(candidate.maxVisibleMessages!, 20),
     historyEnabled: candidate.historyEnabled,
     historyLimit: candidate.historyLimit!,

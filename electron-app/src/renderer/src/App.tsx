@@ -66,6 +66,7 @@ type Status = 'idle' | 'connecting' | 'connected' | 'error'
 
 interface Preferences {
   chatWidth: number
+  backgroundOpacity: number
   maxVisibleMessages: number
   historyEnabled: boolean
   historyLimit: number
@@ -365,7 +366,38 @@ function SettingsPanel({
                 step="1"
                 value={preferences.maxVisibleMessages}
                 onChange={(event) => onChange({ maxVisibleMessages: Number(event.target.value) })}
-                style={rangeStyle}
+                className="settings-range"
+                style={rangeProgressStyle(preferences.maxVisibleMessages, 3, 20)}
+              />
+            </label>
+          </fieldset>
+
+          <fieldset
+            style={{
+              border: '1px solid #3f3f46',
+              borderRadius: '8px',
+              padding: '1rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1rem'
+            }}
+          >
+            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
+              {t('settings.chatBackground')}
+            </legend>
+            <label style={fieldStyle}>
+              <span>
+                {t('settings.backgroundOpacity')}: {preferences.backgroundOpacity}%
+              </span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value={preferences.backgroundOpacity}
+                onChange={(event) => onChange({ backgroundOpacity: Number(event.target.value) })}
+                className="settings-range"
+                style={rangeProgressStyle(preferences.backgroundOpacity, 0, 100)}
               />
             </label>
           </fieldset>

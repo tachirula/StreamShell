@@ -8,6 +8,7 @@ const api = {
   getPreferences: () => ipcRenderer.invoke('preferences:get'),
   setPreferences: (preferences: {
     chatWidth: number
+    backgroundOpacity: number
     maxVisibleMessages: number
     historyEnabled: boolean
     historyLimit: number

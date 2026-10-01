@@ -22,6 +22,7 @@ export interface GnomeStatus {
 
 export interface AppPreferences {
   chatWidth: number
+  backgroundOpacity: number
   maxVisibleMessages: number
   historyEnabled: boolean
   historyLimit: number

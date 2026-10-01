@@ -174,6 +174,7 @@ async function publishPreferences(): Promise<void> {
     chatInterface.OverlaySettingsChanged(
       JSON.stringify({
         chatWidth: preferences.chatWidth,
+        backgroundOpacity: preferences.backgroundOpacity,
         maxVisibleMessages: preferences.maxVisibleMessages,
         historyEnabled: preferences.historyEnabled,
         historyLimit: preferences.historyLimit,
