@@ -99,8 +99,11 @@ The control panel provides persistent preferences for:
 - **Third-party emote APIs:** enabled by default. Turn this off to leave BTTV,
   FFZ, and 7TV codes as plain text.
 - **Animated emotes:** can be switched off through the extension setting.
-- **Overlay appearance and history:** overlay-specific settings are propagated
-  to GNOME.
+- **Overlay appearance and history:** adjust the chat width, background opacity
+  (0–100%), visible messages, and session history in Settings. Appearance
+  changes are applied live to the GNOME overlay. In a sufficiently large app
+  window, Settings align to the left and reflow into columns to use the
+  available space; the compact layout remains centered in smaller windows.
 - **Global show/hide shortcut:** record a modifier and key combination. The
   same shortcut toggles visibility. Super/Windows is reserved by GNOME; Fn is
   often handled by keyboard firmware and may not be detectable. Desktop-level
