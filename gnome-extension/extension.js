@@ -189,7 +189,16 @@ export default class ChatOverlayTest extends Extension {
         // instead of breaking the whole extension.
         import('./animator.js').then(({EmoteAnimator}) => {
             if (!this._alive) return;
-            this._animator = new EmoteAnimator({maxAnimated: MAX_ANIMATED});
+            let scaleFactor = 1;
+            try {
+                scaleFactor = St.ThemeContext.get_for_stage(global.stage).scale_factor || 1;
+            } catch (e) {
+                console.warn(`[StreamShell] could not read the scale factor: ${e}`);
+            }
+            this._animator = new EmoteAnimator({
+                maxAnimated: MAX_ANIMATED,
+                frameHeight: EMOTE_SIZE * scaleFactor,
+            });
             this._syncAnimatorPause();
             this._applyAnimationSetting();
         }).catch(e => {
