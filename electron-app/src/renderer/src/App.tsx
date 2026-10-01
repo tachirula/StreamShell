@@ -4,7 +4,7 @@ import twitchLogo from './assets/twitch-logo.png'
 import { t } from './i18n'
 import { clearAvatarCache, getCachedAvatar, setCachedAvatar } from './avatar-cache'
 
-// --- SVGs Integrados ---
+// --- Integrated SVG icons ---
 const LoadingIcon = (): ReactElement => (
   <svg
     className="spin-anim"
@@ -642,7 +642,7 @@ function App(): ReactElement {
     }
   }, [])
 
-  // Estado de GNOME (symlink, schema, extensión stale)
+  // GNOME status (symlink, schema, stale extension).
   useEffect(() => {
     const off = window.api.onGnomeStatus((data) => {
       console.log('[Renderer] gnome:status →', data)
@@ -651,24 +651,24 @@ function App(): ReactElement {
     return () => off()
   }, [])
 
-  // Avatar: muestra caché al instante, refresca en background.
-  // - Typing: 2s de debounce si no hay caché; instantáneo si la hay.
-  // - Blur (nonce): forzar refresh inmediato.
-  // - Cambios de status (connecting/connected/error) NO disparan el efecto,
-  //   porque `status` ya no está en las dependencias.
+  // Avatar: show the cache immediately and refresh in the background.
+  // - Typing: 2s debounce when there is no cache; immediate when cached.
+  // - Blur (nonce): force an immediate refresh.
+  // - Status changes (connecting/connected/error) do NOT trigger this effect,
+  //   because `status` is no longer a dependency.
   useEffect(() => {
     const clean = channel.trim().toLowerCase()
     const isForced = avatarLookupNonce !== prevNonceRef.current
     prevNonceRef.current = avatarLookupNonce
 
-    // Input vacío → limpiamos todo.
+    // Empty input: clear everything.
     if (!clean) {
       setAvatarUrl(null)
       setAvatarLoading(false)
       return
     }
 
-    // 1) Mostrar caché ya, sin flicker.
+    // 1) Show cached data immediately, without flicker.
     const cached = getCachedAvatar(clean)
     if (cached !== undefined) {
       setAvatarUrl(cached)
@@ -677,8 +677,8 @@ function App(): ReactElement {
       setAvatarLoading(true)
     }
 
-    // 2) Refresh en background. Delay 0 si ya hay algo en pantalla o si
-    //    viene de un blur; 2s solo cuando el usuario está tecleando en frío.
+    // 2) Refresh in the background. Use no delay if data is already visible or
+    //    this came from blur; wait 2s only while typing with a cold cache.
     const delay = cached !== undefined || isForced ? 0 : 2000
 
     const timer = setTimeout(async () => {

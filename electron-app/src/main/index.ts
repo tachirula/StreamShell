@@ -217,20 +217,21 @@ function connectToTwitch(channel: string): void {
   activeChannel = channel
   chatHistory.length = 0
 
-  // Empezamos una sesión nueva: pedimos al overlay que borre los
-  // mensajes anteriores y muestre de nuevo el placeholder.
+  // Start a new session: ask the overlay to clear previous messages
+  // and show the placeholder again.
   notifyOverlayClear()
 
   const client = new tmi.Client({ channels: [channel] })
   twitchClient = client
 
   client.on('connected', (addr: string, port: number) => {
-    console.log(`[StreamShell Backend] WebSocket abierto con ${addr}:${port}, esperando JOIN...`)
+    console.log(`[StreamShell Backend] WebSocket connected to ${addr}:${port}; waiting for JOIN...`)
     clearJoinTimeout()
     joinTimeout = setTimeout(() => {
       console.warn('[StreamShell Backend] JOIN timeout')
       sendToRenderer('twitch:error', {
-        message: `No se pudo entrar al canal "${channel}" (timeout)`
+        key: 'twitch.error.joinTimeout',
+        params: { channel }
       })
       teardownTwitchClient()
     }, 8000)
@@ -239,7 +240,7 @@ function connectToTwitch(channel: string): void {
   client.on('join', (_ch: string, _user: string, self: boolean) => {
     if (!self || twitchClient !== client || activeChannel !== channel) return
     clearJoinTimeout()
-    console.log(`[StreamShell Backend] JOIN confirmado en: ${channel}`)
+    console.log(`[StreamShell Backend] JOIN confirmed for: ${channel}`)
     sendToRenderer('twitch:connected', { channel })
     broadcasterId = null
     thirdPartyEmotesReady = getUserInfo(channel)
@@ -278,7 +279,7 @@ function connectToTwitch(channel: string): void {
     broadcasterId = null
     thirdPartyEmotesReady = Promise.resolve()
     clearThirdPartyEmotes()
-    console.log(`[StreamShell Backend] Desconectado: ${reason}`)
+    console.log(`[StreamShell Backend] Disconnected: ${reason}`)
     sendToRenderer('twitch:disconnected', { reason })
   })
 
@@ -376,7 +377,7 @@ app.whenReady().then(async () => {
   ipcMain.on('set-twitch-channel', (_event, channel: string) => connectToTwitch(channel))
 
   ipcMain.on('disconnect-twitch', () => {
-    console.log('[StreamShell Backend] Desconectado por el usuario')
+    console.log('[StreamShell Backend] Disconnected by user')
     teardownTwitchClient()
     notifyOverlayClear()
   })

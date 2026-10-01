@@ -43,7 +43,7 @@ ul {
   list-style: none;
 }
 
-/* Fondo + reset total en html, body y #root */
+/* Background and full reset for html, body, and #root */
 html,
 body,
 #root {

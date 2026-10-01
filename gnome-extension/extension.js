@@ -98,11 +98,11 @@ export default class ChatOverlayTest extends Extension {
         this._toggleChatShortcut = '';
         this._keybindingRegistered = false;
 
-        // Reposicionamiento — siempre conectado, es barato.
+        // Keep repositioning signals connected; they are inexpensive.
         this._startupId = Main.layoutManager.connect('startup-complete', () => this._reposition());
         this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._reposition());
 
-        // Ocultar durante Activities Overview (bug de alpha compositing).
+        // Hide during Activities Overview (alpha compositing bug).
         this._overviewShowingId = Main.overview.connect('showing', () => {
             this._overviewOpen = true;
             if (this._box) this._box.hide();
@@ -114,8 +114,8 @@ export default class ChatOverlayTest extends Extension {
             this._syncAnimatorPause();
         });
 
-        // Suscripción al signal D-Bus de mensajes.
-        // El tercer argumento ahora es un JSON: {"badges":[...],"segments":[...]}
+        // Subscribe to the D-Bus message signal.
+        // The third argument is now JSON: {"badges":[...],"segments":[...]}
         this._signalId = Gio.DBus.session.signal_subscribe(
             BUS_NAME,
             INTERFACE,
@@ -154,8 +154,8 @@ export default class ChatOverlayTest extends Extension {
             }
         );
 
-        // Suscripción al signal de reseteo. El backend lo emite cuando
-        // el usuario conecta a un canal nuevo o pulsa "Cancelar conexión".
+        // Subscribe to the reset signal. The backend emits it when the user
+        // connects to a new channel or clicks "Cancel connection".
         this._clearSignalId = Gio.DBus.session.signal_subscribe(
             BUS_NAME,
             INTERFACE,
@@ -166,7 +166,7 @@ export default class ChatOverlayTest extends Extension {
             () => this._onChatCleared()
         );
 
-        // Observar la presencia del backend Electron en el bus de sesión.
+        // Watch for the Electron backend on the session bus.
         this._nameWatchId = Gio.bus_watch_name(
             Gio.BusType.SESSION,
             BUS_NAME,
@@ -405,7 +405,7 @@ export default class ChatOverlayTest extends Extension {
             console.warn(`[StreamShell] scroll controls unavailable; chat remains active: ${e}`);
         }
 
-        // Si el overview está abierto justo ahora, nace oculto.
+        // If the Overview is currently open, start hidden.
         if (this._overviewOpen || this._userHidden) {
             this._box.hide();
         }
@@ -546,7 +546,7 @@ export default class ChatOverlayTest extends Extension {
                     : null,
             };
         } catch (_e) {
-            // Backend antiguo: el tercer argumento era texto plano.
+            // Older backend: the third argument was plain text.
             return {badges: [], segments: [{t: 'text', v: String(payload)}], reply: null};
         }
     }
