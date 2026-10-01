@@ -226,6 +226,7 @@ function SettingsPanel({
 
   return (
     <section
+      className="settings-panel-scrollbar"
       onKeyDownCapture={onShortcutKeyDown}
       style={{
         width: '350px',
@@ -717,6 +718,7 @@ function App(): ReactElement {
 
   return (
     <div
+      className={`app-shell${showSettings ? ' settings-open' : ''}`}
       style={{
         padding: '2rem',
         fontFamily: 'system-ui, sans-serif',

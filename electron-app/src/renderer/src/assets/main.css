@@ -9,6 +9,10 @@ body {
   user-select: none;
 }
 
+.app-shell {
+  box-sizing: border-box;
+}
+
 #root {
   width: 100%;
   height: 100%;
@@ -34,6 +38,192 @@ code {
     Liberation Mono,
     monospace;
   font-size: 85%;
+}
+
+.settings-range {
+  width: 100%;
+  height: 20px;
+  margin: 2px 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #9146ff 0,
+    #9146ff var(--range-progress),
+    #3f3f46 var(--range-progress),
+    #3f3f46 100%
+  );
+}
+
+.settings-range::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #3f3f46;
+}
+
+.settings-range::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: #9146ff;
+}
+
+.settings-range::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  margin-top: -5px;
+  appearance: none;
+  border: 3px solid #9146ff;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgb(145 70 255 / 18%);
+}
+
+.settings-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 3px solid #9146ff;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgb(145 70 255 / 18%);
+}
+
+.settings-range:focus-visible {
+  outline: 2px solid #bf94ff;
+  outline-offset: 4px;
+  border-radius: 999px;
+}
+
+.settings-panel-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #9146ff #1f1f23;
+}
+
+.settings-panel-scrollbar::-webkit-scrollbar {
+  width: 10px;
+}
+
+.settings-panel-scrollbar::-webkit-scrollbar-track {
+  border: 1px solid #3f3f46;
+  border-radius: 999px;
+  background: #1f1f23;
+}
+
+.settings-panel-scrollbar::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 2px solid #1f1f23;
+  border-radius: 999px;
+  background: #9146ff;
+}
+
+.settings-panel-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #a970ff;
+}
+
+.settings-panel-scrollbar::-webkit-scrollbar-thumb:active {
+  background: #772ce8;
+}
+
+.download-stepper {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid #52525b;
+  border-radius: 8px;
+  background: #1f1f23;
+}
+
+.download-stepper button {
+  height: 40px;
+  border: 0;
+  background: #26262c;
+  color: #fff;
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.download-stepper button:hover:not(:disabled) {
+  background: #9146ff;
+}
+
+.download-stepper button:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid #bf94ff;
+  outline-offset: -3px;
+}
+
+.download-stepper button:disabled {
+  color: #71717a;
+  cursor: not-allowed;
+}
+
+.download-stepper input {
+  width: 100%;
+  height: 40px;
+  border: 0;
+  border-right: 1px solid #3f3f46;
+  border-left: 1px solid #3f3f46;
+  outline: none;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+}
+
+.download-stepper input:focus-visible {
+  box-shadow: inset 0 0 0 2px #9146ff;
+}
+
+.download-stepper input::-webkit-inner-spin-button,
+.download-stepper input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.download-stepper input[type='number'] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+@media (min-width: 760px) and (min-height: 620px) {
+  #root:has(.app-shell.settings-open) {
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .app-shell.settings-open {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .settings-panel-scrollbar {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+    align-content: start;
+    align-items: start;
+    width: 100% !important;
+    max-height: calc(100% - 100px) !important;
+    padding-right: 0.75rem !important;
+  }
+
+  .settings-panel-scrollbar > h2,
+  .settings-panel-scrollbar > [role='alert'],
+  .settings-panel-scrollbar > p {
+    grid-column: 1 / -1;
+  }
 }
 
 .logo {
