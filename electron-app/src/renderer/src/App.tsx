@@ -1,4 +1,11 @@
-import { useState, useEffect, useRef, type KeyboardEvent, type ReactElement } from 'react'
+import {
+  useState,
+  useEffect,
+  useRef,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactElement
+} from 'react'
 import { MAX_CONCURRENT_IMAGE_DOWNLOADS } from '../../shared/settings-constraints'
 import twitchLogo from './assets/twitch-logo.png'
 import { t } from './i18n'
@@ -178,7 +185,8 @@ function SettingsPanel({
   }
 
   const fieldStyle = { display: 'flex', flexDirection: 'column' as const, gap: '0.4rem' }
-  const rangeStyle = { width: '100%', accentColor: '#bf94ff', cursor: 'pointer' }
+  const rangeProgressStyle = (value: number, min: number, max: number): CSSProperties =>
+    ({ '--range-progress': `${((value - min) / (max - min)) * 100}%` }) as CSSProperties
 
   const onShortcutKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
     if (!recordingShortcut) return
@@ -342,7 +350,8 @@ function SettingsPanel({
                 step="20"
                 value={preferences.chatWidth}
                 onChange={(event) => onChange({ chatWidth: Number(event.target.value) })}
-                style={rangeStyle}
+                className="settings-range"
+                style={rangeProgressStyle(preferences.chatWidth, 280, 600)}
               />
             </label>
             <label style={fieldStyle}>
@@ -535,7 +544,8 @@ function SettingsPanel({
                 value={preferences.historyLimit}
                 disabled={!preferences.historyEnabled}
                 onChange={(event) => onChange({ historyLimit: Number(event.target.value) })}
-                style={rangeStyle}
+                className="settings-range"
+                style={rangeProgressStyle(preferences.historyLimit, 5, 100)}
               />
             </label>
             <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>{t('settings.historyRisk')}</p>
