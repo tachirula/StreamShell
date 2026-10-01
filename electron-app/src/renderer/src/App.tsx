@@ -417,30 +417,58 @@ function SettingsPanel({
             </legend>
             <label style={fieldStyle}>
               <span>{t('settings.concurrentDownloads')}</span>
-              <input
-                type="number"
-                min="1"
-                max={MAX_CONCURRENT_IMAGE_DOWNLOADS}
-                step="1"
-                value={preferences.maxConcurrentImageDownloads}
-                onChange={(event) => {
-                  const count = event.currentTarget.valueAsNumber
-                  if (
-                    Number.isInteger(count) &&
-                    count >= 1 &&
-                    count <= MAX_CONCURRENT_IMAGE_DOWNLOADS
-                  ) {
-                    onChange({ maxConcurrentImageDownloads: count })
+              <div className="download-stepper">
+                <button
+                  type="button"
+                  aria-label={t('settings.decreaseDownloads')}
+                  onClick={() =>
+                    onChange({
+                      maxConcurrentImageDownloads: Math.max(
+                        1,
+                        preferences.maxConcurrentImageDownloads - 1
+                      )
+                    })
                   }
-                }}
-                style={{
-                  padding: '0.55rem',
-                  border: '1px solid #52525b',
-                  borderRadius: '6px',
-                  background: '#27272a',
-                  color: '#fff'
-                }}
-              />
+                  disabled={preferences.maxConcurrentImageDownloads <= 1}
+                >
+                  −
+                </button>
+                <input
+                  type="number"
+                  min="1"
+                  max={MAX_CONCURRENT_IMAGE_DOWNLOADS}
+                  step="1"
+                  aria-label={t('settings.concurrentDownloads')}
+                  value={preferences.maxConcurrentImageDownloads}
+                  onChange={(event) => {
+                    const count = event.currentTarget.valueAsNumber
+                    if (
+                      Number.isInteger(count) &&
+                      count >= 1 &&
+                      count <= MAX_CONCURRENT_IMAGE_DOWNLOADS
+                    ) {
+                      onChange({ maxConcurrentImageDownloads: count })
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  aria-label={t('settings.increaseDownloads')}
+                  onClick={() =>
+                    onChange({
+                      maxConcurrentImageDownloads: Math.min(
+                        MAX_CONCURRENT_IMAGE_DOWNLOADS,
+                        preferences.maxConcurrentImageDownloads + 1
+                      )
+                    })
+                  }
+                  disabled={
+                    preferences.maxConcurrentImageDownloads >= MAX_CONCURRENT_IMAGE_DOWNLOADS
+                  }
+                >
+                  +
+                </button>
+              </div>
             </label>
             <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
               {t('settings.concurrentDownloadsHelp')}

@@ -55,6 +55,8 @@ const dictionaries: Record<Locale, Record<string, string>> = {
       'For best results after changing quality, clear the image cache below while disconnected from Twitch.',
     'settings.downloads': 'Image downloads',
     'settings.concurrentDownloads': 'Maximum simultaneous downloads',
+    'settings.decreaseDownloads': 'Decrease simultaneous downloads',
+    'settings.increaseDownloads': 'Increase simultaneous downloads',
     'settings.concurrentDownloadsHelp':
       'Choose from 1 to 16. Higher values may download emotes faster but use more network bandwidth and system resources.',
     'settings.backendWaylandNote':
@@ -130,6 +132,8 @@ const dictionaries: Record<Locale, Record<string, string>> = {
       'Para mejores resultados después de cambiar la calidad, borra la caché de imágenes abajo cuando estés desconectado de Twitch.',
     'settings.downloads': 'Descargas de imágenes',
     'settings.concurrentDownloads': 'Máximo de descargas simultáneas',
+    'settings.decreaseDownloads': 'Disminuir descargas simultáneas',
+    'settings.increaseDownloads': 'Aumentar descargas simultáneas',
     'settings.concurrentDownloadsHelp':
       'Elige entre 1 y 16. Un valor mayor puede descargar emotes más rápido, pero usa más ancho de banda y recursos del sistema.',
     'settings.backendWaylandNote':
