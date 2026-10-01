@@ -268,7 +268,10 @@ function connectToTwitch(channel: string): void {
     if (twitchClient !== client) return
     console.warn(`[StreamShell Backend] notice ${msgid}: ${message}`)
     clearJoinTimeout()
-    sendToRenderer('twitch:error', { message })
+    sendToRenderer('twitch:error', {
+      key: 'twitch.error.twitchNotice',
+      params: { message }
+    })
     teardownTwitchClient()
   })
 
@@ -323,8 +326,11 @@ function connectToTwitch(channel: string): void {
 
   client.connect().catch((err: Error) => {
     clearJoinTimeout()
-    console.error('[StreamShell Backend] Error de conexión:', err)
-    sendToRenderer('twitch:error', { message: err?.message ?? String(err) })
+    console.error('[StreamShell Backend] Twitch connection failed:', err)
+    sendToRenderer('twitch:error', {
+      key: 'twitch.error.connectionFailed',
+      params: { reason: err?.message ?? String(err) }
+    })
     teardownTwitchClient()
   })
 }

@@ -43,7 +43,9 @@ declare global {
       setPreferences: (preferences: AppPreferences) => Promise<AppPreferences>
       clearCache: () => Promise<boolean>
       onTwitchConnected: (cb: (data: { channel: string }) => void) => () => void
-      onTwitchError: (cb: (data: { message: string }) => void) => () => void
+      onTwitchError: (
+        cb: (data: { key: string; params?: Record<string, string> }) => void
+      ) => () => void
       onTwitchDisconnected: (cb: (data: { reason: string }) => void) => () => void
       onGnomeStatus: (cb: (data: GnomeStatus) => void) => () => void
     }

@@ -14,6 +14,10 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     'panel.retry': 'Retry connection',
     'panel.status.connected': 'Receiving messages from',
     'panel.status.error': 'Connection error:',
+    'twitch.error.joinTimeout':
+      'Could not join Twitch channel "{channel}" before the request timed out.',
+    'twitch.error.twitchNotice': 'Twitch rejected the connection: {message}',
+    'twitch.error.connectionFailed': 'Could not connect to Twitch: {reason}',
     'settings.open': 'Settings',
     'settings.title': 'Settings',
     'settings.back': 'Back to chat',
@@ -83,6 +87,10 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     'panel.retry': 'Reintentar conexión',
     'panel.status.connected': 'Recibiendo mensajes de',
     'panel.status.error': 'Error al conectar:',
+    'twitch.error.joinTimeout':
+      'No se pudo entrar al canal de Twitch "{channel}" antes de que venciera el tiempo de espera.',
+    'twitch.error.twitchNotice': 'Twitch rechazó la conexión: {message}',
+    'twitch.error.connectionFailed': 'No se pudo conectar a Twitch: {reason}',
     'settings.open': 'Configuración',
     'settings.title': 'Configuración',
     'settings.back': 'Volver al chat',

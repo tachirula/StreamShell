@@ -24,7 +24,7 @@ const api = {
     ipcRenderer.on('twitch:connected', listener)
     return () => ipcRenderer.removeListener('twitch:connected', listener)
   },
-  onTwitchError: (cb: (data: { message: string }) => void) => {
+  onTwitchError: (cb: (data: { key: string; params?: Record<string, string> }) => void) => {
     const listener = (_e: unknown, data: any) => cb(data)
     ipcRenderer.on('twitch:error', listener)
     return () => ipcRenderer.removeListener('twitch:error', listener)

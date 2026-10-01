@@ -619,14 +619,15 @@ function App(): ReactElement {
     return () => clearTimeout(timer)
   }, [preferences])
 
-  // Suscripción a los eventos REALES del backend
+  // Subscribe to actual backend events.
   useEffect(() => {
     const offConnected = window.api.onTwitchConnected(({ channel: ch }) => {
       console.log('[Renderer] twitch:connected →', ch)
       setErrorMsg(null)
       setStatus('connected')
     })
-    const offError = window.api.onTwitchError(({ message }) => {
+    const offError = window.api.onTwitchError(({ key, params }) => {
+      const message = t(key, params)
       console.log('[Renderer] twitch:error →', message)
       setErrorMsg(message)
       setStatus('error')
