@@ -42,8 +42,6 @@ const T = (key) => TRANSLATIONS[LOCALE][key] ?? TRANSLATIONS.en[key] ?? key;
 const WAITING_MARKUP = T('waiting');
 // ----------------------------------------------------------------------------
 
-const BG_ALPHA = 0.35;
-
 const DEFAULT_CHAT_WIDTH = 340;
 const PADDING = 12;
 const MARGIN = 16;
@@ -91,6 +89,7 @@ export default class ChatOverlayTest extends Extension {
         this._settings = null;
         this._settingsId = 0;
         this._chatWidth = DEFAULT_CHAT_WIDTH;
+        this._backgroundOpacity = 35;
         this._maxVisibleMessages = DEFAULT_MAX_VISIBLE_MESSAGES;
         this._historyEnabled = false;
         this._historyLimit = 20;
@@ -317,6 +316,9 @@ export default class ChatOverlayTest extends Extension {
             const settings = JSON.parse(payload);
             if (Number.isInteger(settings.chatWidth) && settings.chatWidth >= 280 && settings.chatWidth <= 600)
                 this._chatWidth = settings.chatWidth;
+            if (Number.isInteger(settings.backgroundOpacity) &&
+                settings.backgroundOpacity >= 0 && settings.backgroundOpacity <= 100)
+                this._backgroundOpacity = settings.backgroundOpacity;
             if (Number.isInteger(settings.maxVisibleMessages) &&
                 settings.maxVisibleMessages >= 3 && settings.maxVisibleMessages <= 20)
                 this._maxVisibleMessages = settings.maxVisibleMessages;
@@ -329,7 +331,10 @@ export default class ChatOverlayTest extends Extension {
                 this._toggleChatShortcut = settings.toggleChatShortcut;
                 this._applyChatShortcutSetting();
             }
-            if (this._box) this._box.width = this._chatWidth;
+            if (this._box) {
+                this._box.width = this._chatWidth;
+                this._box.set_style(this._boxStyle());
+            }
             this._updateScrollView();
             if (!this._historyEnabled)
                 this._setFollowingLatest(true);
@@ -378,13 +383,17 @@ export default class ChatOverlayTest extends Extension {
             can_focus: false,
             track_hover: false,
             width: this._chatWidth,
-            style: `background-color: rgba(0,0,0,${BG_ALPHA}); border-radius: 12px; padding: ${PADDING}px;`,
+            style: this._boxStyle(),
         });
         box.add_child(label);
         box.add_child(scrollView);
         box.add_child(newMessagesButton);
 
         return {box, label, linesBox, scrollView, newMessagesButton};
+    }
+
+    _boxStyle() {
+        return `background-color: rgba(0,0,0,${this._backgroundOpacity / 100}); border-radius: 12px; padding: ${PADDING}px;`;
     }
 
     _showBox() {
