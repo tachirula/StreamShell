@@ -1,18 +1,17 @@
 import Clutter from 'gi://Clutter';
-import Cairo from 'gi://cairo';
+import Cogl from 'gi://Cogl';
 import GLib from 'gi://GLib';
 import GdkPixbuf from 'gi://GdkPixbuf';
-import St from 'gi://St';
 
 // Animated emote engine for the overlay.
 //
 // GNOME Shell runs all its JavaScript in the compositor's main thread, so a
-// careless animation can freeze the whole desktop. The design follows five
+// careless animation can freeze the whole desktop. The design follows these
 // rules to keep the cost low:
 //
 //  1. ONE timer for everything (not one per emote), removed whenever there is
 //     nothing to animate.
-//  2. ONE Cairo surface per distinct emote, shared by every actor that shows
+//  2. ONE Cogl texture per distinct emote, shared by every actor that shows
 //     it. 14 messages with the same emote cost one frame upload per tick.
 //  3. The timer stops while paused (overview open, overlay hidden). Frame
 //     selection is time-based, so animations resume in sync.
@@ -20,16 +19,28 @@ import St from 'gi://St';
 //     shown as a still (first frame) so they never cost CPU.
 //  5. It can be switched off (setEnabled(false)); the extension wires that to
 //     a GSettings key.
+//  6. Pixels never go through JavaScript loops: each frame is scaled natively
+//     by GdkPixbuf and handed to the GPU as a Cogl texture. The actors display
+//     it through Clutter.TextureContent.
 
 const TICK_MS = 40;      // ~25 fps upper bound; most GIFs use 50-100 ms delays
 const MAX_STILLS = 64;   // cached first-frame images before the cache resets
-const MAX_FRAME_SIZE = 24;
+
+// Frames are scaled by height so wide emotes keep the same vertical resolution
+// as square ones. The width cap protects memory against extremely wide assets.
+const DEFAULT_FRAME_HEIGHT = 24;
+const MAX_FRAME_WIDTH_RATIO = 6;
 
 export class EmoteAnimator {
-    constructor({maxAnimated = 16} = {}) {
+    constructor({maxAnimated = 16, frameHeight = DEFAULT_FRAME_HEIGHT} = {}) {
         this._maxAnimated = maxAnimated;
+        this._frameHeight = Math.max(8, Math.round(frameHeight));
+        this._maxFrameWidth = this._frameHeight * MAX_FRAME_WIDTH_RATIO;
+        this._coglContext = Clutter.get_default_backend().get_cogl_context();
+        if (!this._coglContext)
+            throw new Error('Mutter did not provide a Cogl context');
         this._entries = new Map();     // path -> animated entry (shared)
-        this._stills = new Map();      // path -> {surface, w, h, sourceWidth, sourceHeight}
+        this._stills = new Map();      // path -> {content, texture, w, h, sourceWidth, sourceHeight, scale}
         this._staticPaths = new Set(); // GIF files with a single frame / unreadable
         this._sourceId = 0;
         this._paused = false;
@@ -170,7 +181,7 @@ export class EmoteAnimator {
         }
 
         const iter = anim.get_iter(null);
-        const frame = this._createSurface(iter.get_pixbuf());
+        const frame = this._createFrame(iter.get_pixbuf());
 
         const entry = {
             path,
@@ -226,7 +237,7 @@ export class EmoteAnimator {
         try {
             // For a GIF this loads only the first frame.
             const pixbuf = GdkPixbuf.Pixbuf.new_from_file(path);
-            still = this._createSurface(pixbuf);
+            still = this._createFrame(pixbuf);
         } catch (e) {
             this._warnOnce(`cannot load still ${path}: ${e}`);
             return null;
@@ -241,40 +252,49 @@ export class EmoteAnimator {
     // --- Helpers ------------------------------------------------------------
 
     _actorFrom(frame, size) {
-        const actor = new St.DrawingArea({
+        const actor = new Clutter.Actor({
             width: Math.max(1, Math.round(size * frame.w / frame.h)),
             height: size,
             y_align: Clutter.ActorAlign.CENTER,
             reactive: false,
+            content: frame.content,
+            content_gravity: Clutter.ContentGravity.RESIZE_FILL,
         });
-        actor.connect('repaint', () => {
-            const [surfaceWidth, surfaceHeight] = actor.get_surface_size();
-            if (surfaceWidth <= 0 || surfaceHeight <= 0) return;
-
-            const cr = actor.get_context();
-            cr.scale(surfaceWidth / frame.w, surfaceHeight / frame.h);
-            cr.setSourceSurface(frame.surface, 0, 0);
-            cr.paint();
-            cr.$dispose();
-        });
-        actor.queue_repaint();
+        try {
+            actor.set_content_scaling_filters(
+                Clutter.ScalingFilter.LINEAR,
+                Clutter.ScalingFilter.LINEAR
+            );
+        } catch (e) {
+            this._warnOnce(`could not set scaling filters: ${e}`);
+        }
         return actor;
     }
 
-    _createSurface(pixbuf) {
+    _createFrame(pixbuf) {
         const sourceWidth = pixbuf.get_width();
         const sourceHeight = pixbuf.get_height();
-        const scale = Math.min(1, MAX_FRAME_SIZE / Math.max(sourceWidth, sourceHeight));
+        const scale = Math.min(
+            1,
+            this._frameHeight / sourceHeight,
+            this._maxFrameWidth / sourceWidth
+        );
         const w = Math.max(1, Math.round(sourceWidth * scale));
         const h = Math.max(1, Math.round(sourceHeight * scale));
-        const frame = scale < 1
-            ? pixbuf.scale_simple(w, h, GdkPixbuf.InterpType.BILINEAR)
-            : pixbuf;
-        if (!frame) throw new Error('Could not scale emote frame');
-
-        const surface = new Cairo.ImageSurface(Cairo.Format.ARGB32, w, h);
-        this._drawPixbuf(surface, frame);
-        return {surface, w, h, sourceWidth, sourceHeight};
+        const fitted = this._fit(pixbuf, w, h, scale);
+        const format = this._pixelFormat(fitted);
+        const texture = Cogl.Texture2D.new_from_data(
+            this._coglContext,
+            w,
+            h,
+            format,
+            fitted.get_rowstride(),
+            fitted.get_pixels()
+        );
+        if (!texture) throw new Error('Cogl could not create the emote texture');
+        const content = Clutter.TextureContent.new_from_texture(texture, null);
+        if (!content) throw new Error('Clutter could not create texture content');
+        return {content, texture, w, h, sourceWidth, sourceHeight, scale};
     }
 
     _upload(entry, pixbuf) {
@@ -285,54 +305,38 @@ export class EmoteAnimator {
                 return;
             }
 
-            const scale = Math.min(1, MAX_FRAME_SIZE / Math.max(entry.sourceWidth, entry.sourceHeight));
-            const frame = scale < 1
-                ? pixbuf.scale_simple(entry.w, entry.h, GdkPixbuf.InterpType.BILINEAR)
-                : pixbuf;
-            if (!frame) throw new Error('Could not scale animation frame');
-            this._drawPixbuf(entry.surface, frame);
-            for (const actor of entry.actors)
-                actor.queue_repaint();
+            this._pushPixels(entry, this._fit(pixbuf, entry.w, entry.h, entry.scale));
         } catch (e) {
             this._warnOnce(`frame upload failed for ${entry.path}: ${e}`);
         }
     }
 
-    _drawPixbuf(surface, pixbuf) {
-        const source = pixbuf.get_pixels();
-        const sourceStride = pixbuf.get_rowstride();
-        const channels = pixbuf.get_n_channels();
-        const hasAlpha = pixbuf.get_has_alpha();
-        const width = pixbuf.get_width();
-        const height = pixbuf.get_height();
-        const cr = new Cairo.Context(surface);
-        cr.setOperator(Cairo.Operator.CLEAR);
-        cr.paint();
-        cr.setOperator(Cairo.Operator.OVER);
-        for (let y = 0; y < height; y++) {
-            let x = 0;
-            while (x < width) {
-                const offset = y * sourceStride + x * channels;
-                const red = source[offset];
-                const green = source[offset + 1];
-                const blue = source[offset + 2];
-                const alpha = hasAlpha ? source[offset + 3] : 255;
-                let end = x + 1;
-                while (end < width) {
-                    const next = y * sourceStride + end * channels;
-                    if (source[next] !== red || source[next + 1] !== green ||
-                        source[next + 2] !== blue ||
-                        (hasAlpha && source[next + 3] !== alpha))
-                        break;
-                    end++;
-                }
-                cr.setSourceRGBA(red / 255, green / 255, blue / 255, alpha / 255);
-                cr.rectangle(x, y, end - x, 1);
-                cr.fill();
-                x = end;
-            }
-        }
-        cr.$dispose();
+    // Downscale natively with GdkPixbuf to avoid GPU minification artifacts.
+    _fit(pixbuf, w, h, scale) {
+        const fitted = scale < 1
+            ? pixbuf.scale_simple(w, h, GdkPixbuf.InterpType.BILINEAR)
+            : pixbuf;
+        if (!fitted) throw new Error('Could not scale emote frame');
+        return fitted;
+    }
+
+    _pixelFormat(pixbuf) {
+        return pixbuf.get_has_alpha()
+            ? Cogl.PixelFormat.RGBA_8888
+            : Cogl.PixelFormat.RGB_888;
+    }
+
+    // Update the shared GPU texture and invalidate its Clutter content so
+    // actors repaint the new frame.
+    _pushPixels(frame, pixbuf) {
+        const ok = frame.texture.set_data(
+            this._pixelFormat(pixbuf),
+            pixbuf.get_rowstride(),
+            pixbuf.get_pixels(),
+            0
+        );
+        if (!ok) throw new Error('Cogl rejected the frame data');
+        frame.content.invalidate();
     }
 
     _warnOnce(message) {
