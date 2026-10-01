@@ -507,21 +507,25 @@ export default class ChatOverlayTest extends Extension {
 
     // --- Rendering ----------------------------------------------------------
 
-    _makeIcon(path, size, animate = true) {
+    _makeIcon(path, size, animate = true, isEmote = false) {
         try {
-            return this._makeIconUnsafe(path, size, animate);
+            return this._makeIconUnsafe(path, size, animate, isEmote);
         } catch (e) {
             console.warn(`[StreamShell] icon failed for ${path}: ${e}\n${e.stack}`);
             return null;
         }
     }
 
-    _makeIconUnsafe(path, size, animate) {
+    _makeIconUnsafe(path, size, animate, isEmote) {
         // Only accept absolute image paths (they come from our own backend).
         if (typeof path !== 'string' || !path.startsWith('/') || !/\.(png|gif|webp)$/.test(path))
             return null;
 
-        if (animate && /\.(gif|webp)$/.test(path) && this._animator) {
+        if (isEmote && this._animator) {
+            const canAnimate = animate && /\.(gif|webp)$/.test(path);
+            const actor = this._animator.makeActor(path, size, canAnimate);
+            if (actor) return actor;
+        } else if (animate && /\.(gif|webp)$/.test(path) && this._animator) {
             const animated = this._animator.makeActor(path, size);
             if (animated) return animated;
         }
@@ -634,7 +638,7 @@ export default class ChatOverlayTest extends Extension {
 
         for (const seg of segments) {
             if (seg.t === 'emote') {
-                const icon = this._makeIcon(seg.path, EMOTE_SIZE, seg.animated !== false);
+                const icon = this._makeIcon(seg.path, EMOTE_SIZE, seg.animated !== false, true);
                 // If the icon can't be built, fall back to the emote's name.
                 if (icon) add(icon);
                 else if (seg.name) add(this._makeWord(String(seg.name), textStyle));

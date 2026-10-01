@@ -52,16 +52,16 @@ export class EmoteAnimator {
     // --- Public API ---------------------------------------------------------
 
     /**
-     * Builds an actor of height `size` showing the emote at `path` (a .gif or .webp).
-     * Animated when possible, otherwise a still frame. Returns null on failure
-     * (the caller should fall back to a plain icon).
+     * Builds an actor of height `size` showing the emote at `path` (a .gif,
+     * .webp or .png). Pass `animate = false` to force a still. Returns null on
+     * failure (the caller should fall back to a plain icon).
      */
-    makeActor(path, size) {
+    makeActor(path, size, animate = true) {
         if (this._destroyed) return null;
 
         try {
-            let entry = this._entries.get(path);
-            if (!entry && this._enabled) {
+            let entry = animate ? this._entries.get(path) : null;
+            if (!entry && animate && this._enabled) {
                 if (this._entries.size >= this._maxAnimated)
                     this._evictOldestEntry();
                 entry = this._createEntry(path);
