@@ -558,7 +558,10 @@ async function publishPreferences(): Promise<void> {
     await thirdPartyEmotesReady
     for (const message of history) {
       if (revision !== preferenceRevision) return
-      const segments = await buildSegments(message.text, message.emotes, { animated: false })
+      const segments = await buildSegments(message.text, message.emotes, {
+        animated: preferences.animatedEmotesEnabled,
+        timeoutMs: MESSAGE_ASSET_TIMEOUT_MS
+      })
       const displaySegments = message.reply
         ? stripReplyMention(segments, message.reply.user)
         : segments

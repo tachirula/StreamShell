@@ -1,5 +1,9 @@
 import { cacheEmote, cacheImage } from './emote-cache'
-import { getThirdPartyEmote, getThirdPartyEmoteNames } from './third-party-emotes'
+import {
+  getThirdPartyEmote,
+  getThirdPartyEmoteNames,
+  getThirdPartyEmoteRevision
+} from './third-party-emotes'
 
 // Splits a chat message into text and emote segments using the `emotes` tag
 // that Twitch attaches to every IRC message. No dictionary needed: the tag
@@ -82,17 +86,12 @@ function isWordCharacter(value: string | undefined): boolean {
 }
 
 let thirdPartyCodesByInitial = new Map<string, string[]>()
-let knownThirdPartyCodes = new Set<string>()
+let knownThirdPartyRevision = -1
 
 function refreshThirdPartyCodes(): void {
+  const revision = getThirdPartyEmoteRevision()
+  if (revision === knownThirdPartyRevision) return
   const codes = getThirdPartyEmoteNames()
-  if (
-    codes.length === knownThirdPartyCodes.size &&
-    codes.every((code) => knownThirdPartyCodes.has(code))
-  ) {
-    return
-  }
-
   thirdPartyCodesByInitial = new Map()
   for (const code of codes.sort((a, b) => b.length - a.length)) {
     const initial = Array.from(code)[0]
@@ -101,7 +100,7 @@ function refreshThirdPartyCodes(): void {
     matches.push(code)
     thirdPartyCodesByInitial.set(initial, matches)
   }
-  knownThirdPartyCodes = new Set(codes)
+  knownThirdPartyRevision = revision
 }
 
 function splitThirdPartyEmotes(
@@ -141,8 +140,40 @@ function splitThirdPartyEmotes(
 export async function buildSegments(
   message: string,
   emotesTag: Record<string, string[]> | null | undefined,
-  options: { animated?: boolean } = {}
+  options: { animated?: boolean; timeoutMs?: number } = {}
 ): Promise<Segment[]> {
+  const deadline = options.timeoutMs ? Date.now() + options.timeoutMs : null
+  let timeoutLogged = false
+  const cacheBeforeDeadline = async (operation: Promise<string | null>): Promise<string | null> => {
+    if (deadline === null) return operation
+    const remainingMs = deadline - Date.now()
+    if (remainingMs <= 0) {
+      if (!timeoutLogged) {
+        timeoutLogged = true
+        console.warn(
+          '[StreamShell Backend] Emote asset deadline exceeded; rendering text fallback.'
+        )
+      }
+      return null
+    }
+    let timer: NodeJS.Timeout | undefined
+    let result: string | null
+    try {
+      result = await Promise.race([
+        operation,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), remainingMs)
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+    if (result === null && !timeoutLogged) {
+      timeoutLogged = true
+      console.warn('[StreamShell Backend] Emote asset deadline exceeded; rendering text fallback.')
+    }
+    return result
+  }
   const chars = Array.from(message)
   const ranges = parseRanges(emotesTag, chars.length)
 
@@ -151,7 +182,12 @@ export async function buildSegments(
   const paths = new Map<string, string | null>()
   await Promise.all(
     uniqueIds.map(async (id) => {
-      paths.set(id, await cacheEmote(id, options.animated === false ? 'static' : 'animated'))
+      paths.set(
+        id,
+        await cacheBeforeDeadline(
+          cacheEmote(id, options.animated === false ? 'static' : 'animated')
+        )
+      )
     })
   )
 
@@ -186,8 +222,9 @@ export async function buildSegments(
           if (!part.urls?.length) return { t: 'text', v: part.code }
           let path: string | null = null
           for (const url of part.urls) {
-            path = await cacheImage(url)
+            path = await cacheBeforeDeadline(cacheImage(url))
             if (path) break
+            if (deadline !== null && Date.now() >= deadline) break
           }
           return path
             ? { t: 'emote', path, name: part.code, animated: options.animated !== false }

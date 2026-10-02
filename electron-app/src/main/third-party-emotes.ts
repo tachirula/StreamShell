@@ -5,6 +5,7 @@ const channelEmotes = new Map<string, string[]>()
 const REQUEST_TIMEOUT_MS = 15000
 let loadRevision = 0
 let activeLoadController: AbortController | null = null
+let emoteRevision = 0
 
 interface ThirdPartyEmote {
   code: string
@@ -23,7 +24,7 @@ const DEFAULT_OPTIONS: ThirdPartyEmoteOptions = {
   bestQuality: true
 }
 
-const IMAGE_SCALES = ['4x', '3x', '2x', '1x'] as const
+const IMAGE_SCALES = ['3x', '2x', '1x'] as const
 
 function requestedScales(options: ThirdPartyEmoteOptions): string[] {
   return options.bestQuality
@@ -70,9 +71,9 @@ async function loadBttv(
       const code = stringField(item, 'code')
       const id = stringField(item, 'id')
       if (code && id) {
-        const urls = requestedScales(options).map(
-          (scale) => `https://cdn.betterttv.net/emote/${id}/${scale}`
-        )
+        const urls = requestedScales(options)
+          .filter((scale) => scale !== '4x')
+          .map((scale) => `https://cdn.betterttv.net/emote/${id}/${scale}`)
         result.push({ code, urls })
       }
     }
@@ -223,8 +224,13 @@ export function getThirdPartyEmoteNames(): string[] {
   return [...channelEmotes.keys()]
 }
 
+export function getThirdPartyEmoteRevision(): number {
+  return emoteRevision
+}
+
 export function clearThirdPartyEmotes(): void {
   loadRevision++
+  emoteRevision++
   activeLoadController?.abort()
   activeLoadController = null
   channelEmotes.clear()
@@ -267,6 +273,7 @@ export async function loadThirdPartyEmotes(
   for (const emote of [...bttv, ...ffz, ...sevenTv]) {
     channelEmotes.set(emote.code, emote.urls)
   }
+  emoteRevision++
 
   console.log(
     `[StreamShell Backend] Third-party emotes for ${channel}: ` +

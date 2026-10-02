@@ -4,7 +4,8 @@ import { cacheImage } from './emote-cache'
 // Twitch badges.
 //
 // The IRC `badges` tag only carries ids: { moderator: '1', subscriber: '12' }.
-// The images come from Helix (works with the App Access Token, no scopes):
+// The images come from Helix using the signed-in user token when available,
+// or an App Access Token as a fallback:
 //   GET /chat/badges/global
 //   GET /chat/badges?broadcaster_id={id}
 // Channel badges override global ones that share the same set_id
@@ -31,11 +32,15 @@ type BadgeIndex = Map<string, Map<string, string>>
 
 /** Which Helix image size to use (1x=18px, 2x=36px, 4x=72px). */
 const IMAGE_KEY = 'image_url_2x' as const
+const FAILURE_COOLDOWN_MS = 45_000
 
 let globalIndex: BadgeIndex | null = null
 let globalLoading: Promise<BadgeIndex> | null = null
+let globalRetryAt = 0
 const channelIndexes = new Map<string, BadgeIndex>()
 const channelLoading = new Map<string, Promise<BadgeIndex>>()
+const channelRetryAt = new Map<string, number>()
+const emptyIndex: BadgeIndex = new Map()
 
 function toIndex(response: HelixBadgeResponse | null): BadgeIndex {
   const index: BadgeIndex = new Map()
@@ -49,12 +54,18 @@ function toIndex(response: HelixBadgeResponse | null): BadgeIndex {
 
 function loadGlobal(): Promise<BadgeIndex> {
   if (globalIndex) return Promise.resolve(globalIndex)
+  if (Date.now() < globalRetryAt) return Promise.resolve(emptyIndex)
   if (!globalLoading) {
     globalLoading = helixGet<HelixBadgeResponse>('/chat/badges/global')
       .then((res) => {
         const index = toIndex(res)
-        // Only keep it if the request actually worked, otherwise retry later.
-        if (res) globalIndex = index
+        if (res) {
+          globalIndex = index
+          globalRetryAt = 0
+        } else {
+          globalRetryAt = Date.now() + FAILURE_COOLDOWN_MS
+          console.warn('[StreamShell Backend] Global badge lookup failed; retrying after cooldown.')
+        }
         return index
       })
       .finally(() => {
@@ -67,6 +78,9 @@ function loadGlobal(): Promise<BadgeIndex> {
 function loadChannel(broadcasterId: string): Promise<BadgeIndex> {
   const cached = channelIndexes.get(broadcasterId)
   if (cached) return Promise.resolve(cached)
+  if (Date.now() < (channelRetryAt.get(broadcasterId) ?? 0)) {
+    return Promise.resolve(emptyIndex)
+  }
 
   let pending = channelLoading.get(broadcasterId)
   if (!pending) {
@@ -75,7 +89,15 @@ function loadChannel(broadcasterId: string): Promise<BadgeIndex> {
     )
       .then((res) => {
         const index = toIndex(res)
-        if (res) channelIndexes.set(broadcasterId, index)
+        if (res) {
+          channelIndexes.set(broadcasterId, index)
+          channelRetryAt.delete(broadcasterId)
+        } else {
+          channelRetryAt.set(broadcasterId, Date.now() + FAILURE_COOLDOWN_MS)
+          console.warn(
+            `[StreamShell Backend] Badge lookup failed for broadcaster ${broadcasterId}; retrying after cooldown.`
+          )
+        }
         return index
       })
       .finally(() => {
@@ -123,4 +145,11 @@ export async function resolveBadges(
   )
 
   return paths.filter((p): p is string => p !== null)
+}
+
+export function clearBadgeCaches(): void {
+  globalIndex = null
+  globalRetryAt = 0
+  channelIndexes.clear()
+  channelRetryAt.clear()
 }

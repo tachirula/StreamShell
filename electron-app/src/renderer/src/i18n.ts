@@ -49,6 +49,9 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     'settings.thirdPartyEmotesEnabled': 'Enable support for BTTV, FFZ and 7TV',
     'settings.thirdPartyEmotesHelp':
       'When disabled, third-party emote codes stay as plain text and their APIs are not queried.',
+    'settings.animatedEmotesEnabled': 'Enable animated emotes',
+    'settings.animatedEmotesHelp':
+      'When disabled, emotes use static images instead of animated versions when available.',
     'settings.emoteBestQuality': 'Always use the best available quality',
     'settings.emoteImageScale': 'Requested image size',
     'settings.emoteQualityCacheHint':
@@ -126,6 +129,9 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     'settings.thirdPartyEmotesEnabled': 'Activar soporte para BTTV, FFZ y 7TV',
     'settings.thirdPartyEmotesHelp':
       'Al desactivarlo, los códigos de emotes de terceros se muestran como texto y no se consultan sus APIs.',
+    'settings.animatedEmotesEnabled': 'Activar emotes animados',
+    'settings.animatedEmotesHelp':
+      'Al desactivarlo, los emotes usan imágenes estáticas en lugar de versiones animadas cuando estén disponibles.',
     'settings.emoteBestQuality': 'Usar siempre la mejor calidad disponible',
     'settings.emoteImageScale': 'Tamaño de imagen solicitado',
     'settings.emoteQualityCacheHint':
