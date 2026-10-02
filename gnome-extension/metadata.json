@@ -1,7 +1,7 @@
 {
-  "uuid": "chat-overlay@test",
-  "name": "Chat Overlay Test",
-  "description": "Overlay transparente de prueba",
+  "uuid": "chat-overlay@hashi",
+  "name": "Stream chat overlay",
+  "description": "Overlay for Twitch",
   "shell-version": ["50"],
   "settings-schema": "org.gnome.shell.extensions.chat-overlay"
 }
