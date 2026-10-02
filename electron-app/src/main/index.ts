@@ -766,7 +766,23 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    try {
+      const url = new URL(details.url)
+      const isTrustedTwitchUrl =
+        url.protocol === 'https:' &&
+        !url.username &&
+        !url.password &&
+        (url.hostname === 'twitch.tv' || url.hostname.endsWith('.twitch.tv'))
+      if (!isTrustedTwitchUrl) {
+        console.warn('[StreamShell Backend] Blocked an untrusted external URL:', url.origin)
+        return { action: 'deny' }
+      }
+      void shell.openExternal(url.toString()).catch((error) => {
+        console.error('[StreamShell Backend] Could not open Twitch URL:', error)
+      })
+    } catch (error) {
+      console.warn('[StreamShell Backend] Blocked an invalid external URL:', error)
+    }
     return { action: 'deny' }
   })
 
@@ -778,13 +794,24 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return
   electronApp.setAppUserModelId('com.electron')
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
   preferences = await loadPreferences()
   setMaxConcurrentImageDownloads(preferences.maxConcurrentImageDownloads)
 
-  ipcMain.on('set-twitch-channel', (_event, channel: string) => connectToTwitch(channel))
+  ipcMain.on('set-twitch-channel', (_event, value: unknown) => {
+    if (typeof value !== 'string' || !/^[a-zA-Z0-9_]{1,25}$/.test(value.trim())) {
+      console.warn('[StreamShell Backend] Rejected an invalid Twitch channel name.')
+      sendToRenderer('twitch:error', {
+        key: 'twitch.error.connectionFailed',
+        params: { reason: 'Invalid Twitch channel name.' }
+      })
+      return
+    }
+    connectToTwitch(value.trim().toLowerCase())
+  })
 
   ipcMain.on('disconnect-twitch', () => {
     console.log('[StreamShell Backend] Disconnected by user')

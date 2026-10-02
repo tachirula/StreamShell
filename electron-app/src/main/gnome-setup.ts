@@ -1,7 +1,7 @@
-import { exec, execSync } from 'child_process'
-import { existsSync, lstatSync, statSync, symlinkSync, readlinkSync } from 'fs'
+import { execFile, execFileSync } from 'child_process'
+import { existsSync, lstatSync, readdirSync, statSync, symlinkSync, readlinkSync } from 'fs'
 import { homedir } from 'os'
-import { dirname, join } from 'path'
+import { dirname, join, resolve } from 'path'
 
 export const GNOME_EXTENSION_UUID = 'chat-overlay@test'
 export const GNOME_EXTENSION_NAME = 'Chat Overlay Test'
@@ -69,38 +69,40 @@ export function resolveRepoExtensionPath(): string {
 
 // --- Shell helpers ----------------------------------------------------------
 
-function runCapture(cmd: string): string | null {
+function runCapture(command: string, args: string[] = []): string | null {
   try {
-    return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return execFileSync(command, args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim()
   } catch {
     return null
   }
 }
 
-function runAsync(cmd: string): Promise<{ ok: boolean; stderr: string }> {
+function runAsync(command: string, args: string[] = []): Promise<{ ok: boolean; stderr: string }> {
   return new Promise((resolve) => {
-    exec(cmd, (err, _stdout, stderr) => {
+    execFile(command, args, (err, _stdout, stderr) => {
       resolve({ ok: !err, stderr: (stderr || err?.message || '').trim() })
     })
   })
 }
 
-/** Returns the Unix epoch (seconds) at which gnome-shell started. */
-function getGnomeShellStartTime(): number | null {
-  const pid = runCapture('pgrep -x gnome-shell')
-  if (!pid) return null
-  const uptime = runCapture(`ps -o etimes= -p ${pid}`)
-  if (!uptime) return null
-  const seconds = parseInt(uptime, 10)
-  if (Number.isNaN(seconds)) return null
-  return Math.floor(Date.now() / 1000) - seconds
+/** Returns the start times for every running GNOME Shell process. */
+function getGnomeShellStartTimes(): number[] {
+  const pids =
+    runCapture('pgrep', ['-x', 'gnome-shell'])
+      ?.split(/\s+/)
+      .filter((pid) => /^\d+$/.test(pid)) ?? []
+  return pids.flatMap((pid) => {
+    const elapsed = runCapture('ps', ['-o', 'etimes=', '-p', pid])
+    const seconds = elapsed ? Number.parseInt(elapsed, 10) : Number.NaN
+    return Number.isFinite(seconds) ? [Math.floor(Date.now() / 1000) - seconds] : []
+  })
 }
 
 function detectWayland(): boolean {
-  return (
-    process.env.XDG_SESSION_TYPE === 'wayland' ||
-    !!process.env.WAYLAND_DISPLAY
-  )
+  return process.env.XDG_SESSION_TYPE === 'wayland' || !!process.env.WAYLAND_DISPLAY
 }
 
 // --- Dev-only checks --------------------------------------------------------
@@ -126,29 +128,38 @@ function ensureSymlink(repoExtensionPath: string): GnomeWarning[] {
   }
 
   try {
-    if (!existsSync(installedPath)) {
-      symlinkSync(repoExtensionPath, installedPath)
-      return warnings
+    let stat
+    try {
+      stat = lstatSync(installedPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      try {
+        symlinkSync(repoExtensionPath, installedPath)
+      } catch (createError) {
+        if ((createError as NodeJS.ErrnoException).code !== 'EEXIST') throw createError
+        stat = lstatSync(installedPath)
+      }
+      if (!stat) return warnings
     }
 
-    const stat = lstatSync(installedPath)
     if (!stat.isSymbolicLink()) {
       // Installed as a real directory (production .deb or manual copy).
       // Leave it alone — this is the expected layout outside dev.
       return warnings
     }
 
-    const target = readlinkSync(installedPath)
-    if (target !== repoExtensionPath) {
+    const target = resolve(dirname(installedPath), readlinkSync(installedPath))
+    if (target !== resolve(repoExtensionPath)) {
       warnings.push({
         key: 'symlinkElsewhere',
-        params: { actual: target, expected: repoExtensionPath }
+        params: { actual: target, expected: resolve(repoExtensionPath) }
       })
     }
-  } catch (err: any) {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
     warnings.push({
       key: 'symlinkCheckFailed',
-      params: { message: String(err?.message ?? err) }
+      params: { message }
     })
   }
   return warnings
@@ -164,12 +175,11 @@ async function ensureSchemaCompiled(repoExtensionPath: string): Promise<GnomeWar
   if (!existsSync(xmlPath)) return warnings
 
   const needsCompile =
-    !existsSync(compiledPath) ||
-    statSync(xmlPath).mtimeMs > statSync(compiledPath).mtimeMs
+    !existsSync(compiledPath) || statSync(xmlPath).mtimeMs > statSync(compiledPath).mtimeMs
 
   if (!needsCompile) return warnings
 
-  const { ok, stderr } = await runAsync(`glib-compile-schemas ${schemaDir}`)
+  const { ok, stderr } = await runAsync('glib-compile-schemas', [schemaDir])
   if (!ok) {
     warnings.push({
       key: 'schemaCompileFailed',
@@ -180,19 +190,25 @@ async function ensureSchemaCompiled(repoExtensionPath: string): Promise<GnomeWar
 }
 
 /**
- * Detects whether extension.js was modified after gnome-shell started, which
- * means the version loaded in memory is stale and only a relogin will pick
- * up the changes on Wayland.
+ * Detects changes to any source or schema loaded by GNOME Shell after it
+ * started, which means a relogin is required on Wayland.
  */
 function detectStaleExtension(repoExtensionPath: string): boolean {
-  const extJs = join(repoExtensionPath, 'extension.js')
-  if (!existsSync(extJs)) return false
-
-  const shellStart = getGnomeShellStartTime()
-  if (shellStart === null) return false
-
-  const extMtime = Math.floor(statSync(extJs).mtimeMs / 1000)
-  return extMtime > shellStart
+  const shellStartTimes = getGnomeShellStartTimes()
+  if (shellStartTimes.length === 0) return false
+  const shellStartedAt = Math.min(...shellStartTimes)
+  const extensionModules = readdirSync(repoExtensionPath)
+    .filter((file) => file.endsWith('.js'))
+    .map((file) => join(repoExtensionPath, file))
+  const schemaDir = join(repoExtensionPath, 'schemas')
+  const schemaFiles = existsSync(schemaDir)
+    ? readdirSync(schemaDir)
+        .filter((file) => file.endsWith('.xml') || file === 'gschemas.compiled')
+        .map((file) => join(schemaDir, file))
+    : []
+  return [...extensionModules, ...schemaFiles].some(
+    (path) => Math.floor(statSync(path).mtimeMs / 1000) > shellStartedAt
+  )
 }
 
 // --- Public API -------------------------------------------------------------
@@ -233,7 +249,7 @@ export async function checkGnomeSetup(
 /** Enables the extension (idempotent). Non-fatal on failure. */
 export function ensureGnomeExtensionEnabled(): Promise<void> {
   if (process.platform !== 'linux') return Promise.resolve()
-  return runAsync(`gnome-extensions enable ${GNOME_EXTENSION_UUID}`).then(({ ok, stderr }) => {
+  return runAsync('gnome-extensions', ['enable', GNOME_EXTENSION_UUID]).then(({ ok, stderr }) => {
     if (!ok) {
       console.warn('[StreamShell] Could not enable GNOME extension:', stderr)
     }
