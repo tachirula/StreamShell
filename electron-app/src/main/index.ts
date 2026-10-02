@@ -511,6 +511,147 @@ function getStringRecord(value: unknown): Record<string, string> | null {
   return result
 }
 
+async function sendTwitchChatMessage(requestId: string, rawText: string): Promise<string> {
+  const text = rawText.trim()
+  console.log(
+    `[StreamShell Backend] [chat:${requestId}] SendChatMessage received (length=${text.length}).`
+  )
+  if (!preferences.interactiveChatEnabled) {
+    console.warn(
+      `[StreamShell Backend] [chat:${requestId}] Rejected: interactive chat is disabled.`
+    )
+    throw new dbus.DBusError(
+      'org.streamshell.Twitch.Error.Disabled',
+      'Interactive chat is disabled.'
+    )
+  }
+  if (!authSession || !twitchClient || !activeChannel) {
+    console.warn(
+      `[StreamShell Backend] [chat:${requestId}] Rejected: missing auth, IRC client, or active channel.`
+    )
+    throw new dbus.DBusError(
+      'org.streamshell.Twitch.Error.NotConnected',
+      'Connect to Twitch before sending a message.'
+    )
+  }
+  if (!authSession.scopes.includes('chat:edit')) {
+    console.warn(
+      `[StreamShell Backend] [chat:${requestId}] Rejected: account lacks chat:edit scope.`
+    )
+    throw new dbus.DBusError(
+      'org.streamshell.Twitch.Error.PermissionDenied',
+      'Sign in again to grant chat:edit.'
+    )
+  }
+  if (!text || text.length > 500 || /[\r\n]/.test(text)) {
+    console.warn(
+      `[StreamShell Backend] [chat:${requestId}] Rejected: invalid message length or line breaks.`
+    )
+    throw new dbus.DBusError(
+      'org.streamshell.Twitch.Error.InvalidMessage',
+      'Message must contain 1 to 500 characters on one line.'
+    )
+  }
+  const client = twitchClient
+  const channel = activeChannel
+  const account = authSession.login
+  if (joinedChannel !== channel) {
+    console.warn(
+      `[StreamShell Backend] [chat:${requestId}] Rejected: IRC has not joined ${channel} yet.`
+    )
+    throw new dbus.DBusError(
+      'org.streamshell.Twitch.Error.NotConnected',
+      'The Twitch chat connection is still joining the channel. Try again in a moment.'
+    )
+  }
+  const connectedUsername = client.getUsername()
+  if (
+    typeof connectedUsername !== 'string' ||
+    connectedUsername.toLowerCase() !== account.toLowerCase()
+  ) {
+    console.error(
+      `[StreamShell Backend] [chat:${requestId}] Refusing to send: IRC identity does not match the signed-in account.`,
+      { connectedUsername, account, channel }
+    )
+    throw new dbus.DBusError(
+      'org.streamshell.Twitch.Error.NotAuthenticated',
+      'The Twitch chat connection is not authenticated as the signed-in account. Reconnect to the channel and try again.'
+    )
+  }
+  console.log(
+    `[StreamShell Backend] [chat:${requestId}] Calling tmi.js say() as ${account} in ${channel}.`
+  )
+  const echoKey = chatEchoKey(channel, text)
+  const timeout = setTimeout(() => {
+    const pending = pendingChatEchoes.get(echoKey)
+    if (!pending) return
+    const index = pending.findIndex((entry) => entry.requestId === requestId)
+    if (index === -1) return
+    pending.splice(index, 1)
+    if (pending.length === 0) pendingChatEchoes.delete(echoKey)
+    console.warn(
+      `[StreamShell Backend] [chat:${requestId}] No Twitch self-echo observed within 15 seconds; tmi.js acceptance does not confirm channel delivery.`
+    )
+  }, 15_000)
+  const pending = pendingChatEchoes.get(echoKey) ?? []
+  pending.push({ requestId, timeout })
+  pendingChatEchoes.set(echoKey, pending)
+  try {
+    await client.say(channel, text)
+    console.log(
+      `[StreamShell Backend] [chat:${requestId}] tmi.js say() resolved; waiting for Twitch self-echo.`
+    )
+    return 'sent'
+  } catch (error) {
+    clearTimeout(timeout)
+    const remaining =
+      pendingChatEchoes.get(echoKey)?.filter((entry) => entry.requestId !== requestId) ?? []
+    if (remaining.length > 0) pendingChatEchoes.set(echoKey, remaining)
+    else pendingChatEchoes.delete(echoKey)
+    console.error(
+      `[StreamShell Backend] [chat:${requestId}] tmi.js say() failed for ${channel}:`,
+      error
+    )
+    throw new dbus.DBusError(
+      'org.streamshell.Twitch.Error.SendFailed',
+      error instanceof Error ? error.message : String(error)
+    )
+  }
+}
+
+async function loadUserProfile(rawLogin: string): Promise<string> {
+  if (!preferences.clickableProfilesEnabled) {
+    throw new dbus.DBusError(
+      'org.streamshell.Twitch.Error.Disabled',
+      'Clickable profiles are disabled.'
+    )
+  }
+  const login = rawLogin.trim().toLowerCase()
+  if (!/^[a-z0-9_]{1,25}$/.test(login)) {
+    throw new dbus.DBusError('org.streamshell.Twitch.Error.InvalidUser', 'Invalid Twitch username.')
+  }
+
+  const profile = await getTwitchUserProfile(login)
+  const messages = chatHistory
+    .filter((message) =>
+      profile?.id && message.userId
+        ? message.userId === profile.id
+        : message.login.toLowerCase() === login
+    )
+    .slice(-preferences.profileMessageLimit)
+    .map(({ sequence, text }) => ({ sequence, text }))
+  const lastSequence = chatMessageSequence
+  const avatarPath = profile?.avatar ? await cacheImage(profile.avatar) : null
+  return JSON.stringify({
+    login,
+    displayName: profile?.displayName ?? login,
+    description: profile?.description ?? '',
+    avatarPath,
+    messages,
+    lastSequence
+  })
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string')
 }
@@ -525,8 +666,7 @@ function getEmotePositions(value: unknown): Record<string, string[]> | null {
   return result
 }
 
-function getChatReply(tags: Record<string, unknown>, message: string): ChatReply | null {
-  const mention = message.match(/^@([a-zA-Z0-9_]+)(?:\s|$)/)?.[1]
+function getChatReply(tags: Record<string, unknown>): ChatReply | null {
   const replyUserLogin =
     typeof tags['reply-parent-user-login'] === 'string' ? tags['reply-parent-user-login'] : ''
   const replyDisplayName =
@@ -538,14 +678,17 @@ function getChatReply(tags: Record<string, unknown>, message: string): ChatReply
     replyUserLogin.length > 0 ||
     replyDisplayName.length > 0 ||
     replyMessage.length > 0
-  if (!mention && !hasReplyTags) return null
+  if (!hasReplyTags) return null
 
-  const user = mention || replyUserLogin || replyDisplayName
+  const user = replyUserLogin || replyDisplayName
   return user ? { user, message: replyMessage } : null
 }
 
 function notifyOverlayClear(): void {
   if (chatInterface) chatInterface.ChatCleared()
+  messageChain = messageChain.then(() => {
+    if (chatInterface) chatInterface.ChatCleared()
+  })
 }
 
 async function publishPreferences(): Promise<void> {
@@ -571,22 +714,16 @@ async function publishPreferences(): Promise<void> {
         payload: JSON.stringify({
           badges: message.badges,
           segments: displaySegments,
+          login: message.login,
+          text: message.text,
+          sequence: message.sequence,
           reply: message.reply
         })
       })
     }
 
     if (revision !== preferenceRevision || !chatInterface) return
-    chatInterface.OverlaySettingsChanged(
-      JSON.stringify({
-        chatWidth: preferences.chatWidth,
-        backgroundOpacity: preferences.backgroundOpacity,
-        maxVisibleMessages: preferences.maxVisibleMessages,
-        historyEnabled: preferences.historyEnabled,
-        historyLimit: preferences.historyLimit,
-        toggleChatShortcut: preferences.toggleChatShortcut
-      })
-    )
+    chatInterface.OverlaySettingsChanged(overlaySettingsJson())
     if (shouldReplayHistory) {
       chatInterface.ChatCleared()
       for (const message of replay) {
@@ -607,10 +744,65 @@ function clearJoinTimeout(): void {
   }
 }
 
+function chatEchoKey(channel: string, text: string): string {
+  return JSON.stringify([channel.replace(/^#/, '').toLowerCase(), text])
+}
+
+function roomIdFromTags(tags: Record<string, unknown>): string | null {
+  const roomId = tags['room-id']
+  return typeof roomId === 'string' && /^\d{1,32}$/.test(roomId) ? roomId : null
+}
+
+function loadEmotesForRoom(channel: string, roomId: string): void {
+  if (!preferences.thirdPartyEmotesEnabled || thirdPartyBroadcasterId === roomId) return
+  thirdPartyBroadcasterId = roomId
+  thirdPartyEmotesReady = loadThirdPartyEmotes(channel, roomId, {
+    imageScale: preferences.emoteImageScale,
+    bestQuality: preferences.emoteBestQuality
+  }).catch((error) => {
+    console.error('[StreamShell Backend] Failed to load third-party emotes:', error)
+  })
+}
+
+async function resolveMessageAssets(
+  badgesTag: Record<string, string> | null,
+  text: string,
+  emotes: Record<string, string[]> | null,
+  roomId: string | null
+): Promise<{ badges: string[]; segments: Segment[] }> {
+  let timeout: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      Promise.all([
+        resolveBadges(badgesTag, roomId ?? broadcasterId),
+        buildSegments(text, emotes, {
+          animated: preferences.animatedEmotesEnabled,
+          timeoutMs: MESSAGE_ASSET_TIMEOUT_MS
+        }),
+        thirdPartyEmotesReady
+      ]).then(([badges, segments]) => ({ badges, segments })),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Message assets exceeded ${MESSAGE_ASSET_TIMEOUT_MS}ms`)),
+          MESSAGE_ASSET_TIMEOUT_MS
+        )
+      })
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
 function teardownTwitchClient(): void {
   clearJoinTimeout()
+  for (const pending of pendingChatEchoes.values()) {
+    for (const echo of pending) clearTimeout(echo.timeout)
+  }
+  pendingChatEchoes.clear()
   activeChannel = null
   broadcasterId = null
+  thirdPartyBroadcasterId = null
+  joinedChannel = null
   thirdPartyEmotesReady = Promise.resolve()
   clearThirdPartyEmotes()
   if (twitchClient) {
@@ -619,16 +811,27 @@ function teardownTwitchClient(): void {
   }
 }
 
-function connectToTwitch(channel: string): void {
+function connectToTwitch(channel: string, preserveChat = false): void {
   teardownTwitchClient()
   activeChannel = channel
-  chatHistory.length = 0
+  firstChatMessageLogged = false
 
-  // Start a new session: ask the overlay to clear previous messages
-  // and show the placeholder again.
-  notifyOverlayClear()
+  if (!preserveChat) {
+    chatHistory.length = 0
+    notifyOverlayClear()
+  }
 
-  const client = new tmi.Client({ channels: [channel] })
+  const client = new tmi.Client({
+    ...(authSession
+      ? {
+          identity: {
+            username: authSession.login,
+            password: `oauth:${authSession.accessToken}`
+          }
+        }
+      : {}),
+    channels: [channel]
+  })
   twitchClient = client
 
   client.on('connected', (addr: string, port: number) => {
@@ -647,39 +850,20 @@ function connectToTwitch(channel: string): void {
   client.on('join', (_ch: string, _user: string, self: boolean) => {
     if (!self || twitchClient !== client || activeChannel !== channel) return
     clearJoinTimeout()
-    console.log(`[StreamShell Backend] JOIN confirmed for: ${channel}`)
+    joinedChannel = channel
+    console.log(`[StreamShell Backend] JOIN confirmed for: ${channel} as ${client.getUsername()}.`)
     sendToRenderer('twitch:connected', { channel })
     broadcasterId = null
-    thirdPartyEmotesReady = getUserInfo(channel)
-      .then((info) => {
-        if (twitchClient !== client || activeChannel !== channel) return
-        broadcasterId = info?.id ?? null
-        void preloadBadges(broadcasterId).catch((error) => {
-          console.warn('[StreamShell Backend] Failed to preload chat badges:', error)
-        })
-        const emoteLoad =
-          preferences.thirdPartyEmotesEnabled && broadcasterId
-            ? loadThirdPartyEmotes(channel, broadcasterId, {
-                imageScale: preferences.emoteImageScale,
-                bestQuality: preferences.emoteBestQuality
-              })
-            : Promise.resolve()
-        return emoteLoad
-      })
-      .catch((error) => {
-        console.error('[StreamShell Backend] Failed to load channel emotes:', error)
-      })
+    thirdPartyBroadcasterId = null
+    thirdPartyEmotesReady = Promise.resolve()
+    void preloadBadges(null).catch((error) => {
+      console.warn('[StreamShell Backend] Failed to preload global chat badges:', error)
+    })
   })
 
   client.on('notice', (_ch: string, msgid: string, message: string) => {
     if (twitchClient !== client) return
     console.warn(`[StreamShell Backend] notice ${msgid}: ${message}`)
-    clearJoinTimeout()
-    sendToRenderer('twitch:error', {
-      key: 'twitch.error.twitchNotice',
-      params: { message }
-    })
-    teardownTwitchClient()
   })
 
   client.on('disconnected', (reason: string) => {
@@ -687,8 +871,11 @@ function connectToTwitch(channel: string): void {
     clearJoinTimeout()
     activeChannel = null
     broadcasterId = null
+    thirdPartyBroadcasterId = null
+    joinedChannel = null
     thirdPartyEmotesReady = Promise.resolve()
     clearThirdPartyEmotes()
+    notifyOverlayClear()
     console.log(`[StreamShell Backend] Disconnected: ${reason}`)
     sendToRenderer('twitch:disconnected', { reason })
   })
@@ -697,11 +884,39 @@ function connectToTwitch(channel: string): void {
     'message',
     (_channel: string, tags: Record<string, unknown>, message: string, self: boolean) => {
       if (twitchClient !== client) return
-      if (self) return
+      if (self && !preferences.interactiveChatEnabled) return
+      if (self) {
+        const echoedText = String(message).trim()
+        const echoKey = chatEchoKey(_channel, echoedText)
+        const pending = pendingChatEchoes.get(echoKey)
+        const matched = pending?.shift()
+        if (pending && matched) {
+          clearTimeout(matched.timeout)
+          if (pending.length === 0) pendingChatEchoes.delete(echoKey)
+          console.log(
+            `[StreamShell Backend] [chat:${matched.requestId}] Twitch self-echo received in ${_channel} (length=${echoedText.length}).`
+          )
+        } else {
+          console.log(
+            `[StreamShell Backend] Unmatched Twitch self-echo received in ${_channel} (length=${echoedText.length}).`
+          )
+        }
+      }
+      if (!firstChatMessageLogged) {
+        firstChatMessageLogged = true
+        console.log(`[StreamShell Backend] First chat message received in ${channel}.`)
+      }
       const user = String(tags['display-name'] || tags.username || 'unknown')
+      const login = String(tags.username || user).toLowerCase()
+      const userId = String(tags['user-id'] || '')
+      const roomId = roomIdFromTags(tags)
+      if (roomId) {
+        broadcasterId = roomId
+        loadEmotesForRoom(channel, roomId)
+      }
       const color = String(tags.color || '#8A2BE2')
       const text = String(message)
-      const reply = getChatReply(tags, text)
+      const reply = getChatReply(tags)
       const badgesTag = getStringRecord(tags.badges)
       const emotes = getEmotePositions(tags.emotes)
 
@@ -710,21 +925,38 @@ function connectToTwitch(channel: string): void {
           let badges: string[] = []
           let segments: Segment[] = [{ t: 'text', v: text }]
           try {
-            await thirdPartyEmotesReady
-            ;[badges, segments] = await Promise.all([
-              resolveBadges(badgesTag, broadcasterId),
-              buildSegments(text, emotes)
-            ])
+            ;({ badges, segments } = await resolveMessageAssets(badgesTag, text, emotes, roomId))
             if (reply) segments = stripReplyMention(segments, reply.user)
           } catch (err) {
-            console.warn('[StreamShell Backend] could not resolve message assets:', err)
+            console.warn(
+              `[StreamShell Backend] Message assets unavailable; showing text only after ${MESSAGE_ASSET_TIMEOUT_MS}ms:`,
+              err
+            )
+            badges = []
+            segments = [{ t: 'text', v: text }]
+            if (reply) segments = stripReplyMention(segments, reply.user)
           }
+          const sequence = ++chatMessageSequence
           if (activeChannel) {
-            chatHistory.push({ user, color, text, badges, emotes, reply })
+            chatHistory.push({
+              user,
+              login,
+              userId,
+              color,
+              text,
+              sequence,
+              badges,
+              emotes,
+              reply
+            })
             if (chatHistory.length > MAX_STORED_HISTORY) chatHistory.shift()
           }
           if (chatInterface) {
-            chatInterface.MessageReceived(user, color, JSON.stringify({ badges, segments, reply }))
+            chatInterface.MessageReceived(
+              user,
+              color,
+              JSON.stringify({ badges, segments, login, text, sequence, reply })
+            )
           }
         })
         .catch((err) => console.error('[StreamShell Backend] message pipeline failed:', err))
@@ -899,8 +1131,10 @@ app.whenReady().then(async () => {
     preferences = next
     if (!preferences.thirdPartyEmotesEnabled) {
       clearThirdPartyEmotes()
+      thirdPartyBroadcasterId = null
       thirdPartyEmotesReady = Promise.resolve()
     } else if ((thirdPartyEmotesChanged || emoteQualityChanged) && activeChannel && broadcasterId) {
+      thirdPartyBroadcasterId = broadcasterId
       thirdPartyEmotesReady = loadThirdPartyEmotes(activeChannel, broadcasterId, {
         imageScale: preferences.emoteImageScale,
         bestQuality: preferences.emoteBestQuality
@@ -921,6 +1155,9 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('get-streamer-avatar', async (_event, channel: string) => {
+    if (typeof channel !== 'string' || !/^[a-zA-Z0-9_]{1,25}$/.test(channel.trim())) {
+      throw new Error('Invalid Twitch channel name for avatar lookup.')
+    }
     return await getStreamerAvatar(channel)
   })
 
