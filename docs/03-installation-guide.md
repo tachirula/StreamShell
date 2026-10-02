@@ -7,7 +7,7 @@ See the [architecture diagrams](./README.md) for process and message flows.
 
 ## Requirements
 
-- Linux with GNOME Shell 45 or newer.
+- Linux with GNOME Shell 50 or newer.
 - Node.js 18 or newer and npm.
 - `glib-compile-schemas` for compiling the extension's GSettings schema.
 - A Twitch developer application for the Helix client credentials used by
