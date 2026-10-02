@@ -1,10 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
   <schema id="org.gnome.shell.extensions.chat-overlay" path="/org/gnome/shell/extensions/chat-overlay/">
-    <key name="background-opacity" type="d">
-      <default>0.35</default>
-      <summary>Opacity of the overlay background</summary>
-    </key>
     <key name="animated-emotes" type="b">
       <default>true</default>
       <summary>Animate emotes</summary>

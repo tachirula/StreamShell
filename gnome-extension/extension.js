@@ -6,65 +6,22 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-
-// --- i18n (minimal, extension-side) -----------------------------------------
-// GNOME extensions traditionally use gettext with .po/.mo files under
-// locale/<lang>/LC_MESSAGES/<uuid>.mo. That's the right long-term path once
-// we package as .deb, but for now a tiny dictionary keeps things self-
-// contained and avoids pulling in the gettext toolchain during dev.
-
-const TRANSLATIONS = {
-    en: {
-        waiting: '<b>Waiting for Twitch connection...</b>',
-        latest: '↓ Jump to latest',
-        replyTo: 'Reply to',
-    },
-    es: {
-        waiting: '<b>Esperando conexión a Twitch...</b>',
-        latest: '↓ Ir a los nuevos',
-        replyTo: 'Respuesta a',
-    },
-};
-
-function detectLocale() {
-    // GLib returns e.g. ['es_AR.UTF-8', 'es_AR', 'es', 'en_US.UTF-8', 'C']
-    const names = GLib.get_language_names();
-    for (const name of names) {
-        const short = name.split(/[._]/)[0].toLowerCase();
-        if (TRANSLATIONS[short]) return short;
-    }
-    return 'en';
-}
-
-const LOCALE = detectLocale();
-const T = (key) => TRANSLATIONS[LOCALE][key] ?? TRANSLATIONS.en[key] ?? key;
-
-const WAITING_MARKUP = T('waiting');
-// ----------------------------------------------------------------------------
-
-const DEFAULT_CHAT_WIDTH = 340;
-const PADDING = 12;
-const MARGIN = 16;
-const DEFAULT_MAX_VISIBLE_MESSAGES = 10;
-const MESSAGE_HEIGHT = 30;
-const DEFAULT_COLOR = '#8A2BE2';
-
-const FONT_SIZE = 16;
-const BADGE_SIZE = 18;
-const EMOTE_SIZE = 24;
-// A single "word" longer than this (URLs, spam) is split so it can't
-// overflow the box.
-const MAX_WORD_LEN = 28;
-
-// Animated emotes: max distinct animated emotes at once, and the GSettings
-// key that switches animation on/off.
-const MAX_ANIMATED = 16;
-const SETTING_ANIMATED = 'animated-emotes';
-const SETTING_TOGGLE_CHAT = 'toggle-chat-shortcut';
-
-const BUS_NAME = 'org.streamshell.Twitch';
-const OBJECT_PATH = '/org/streamshell/Twitch/Chat';
-const INTERFACE = 'org.streamshell.Twitch.Chat';
+import {T, WAITING_MARKUP} from './i18n.js';
+import {renderFallbackMessage, renderMessage} from './message-renderer.js';
+import {
+    BUS_NAME,
+    DEFAULT_CHAT_WIDTH,
+    DEFAULT_MAX_VISIBLE_MESSAGES,
+    EMOTE_SIZE,
+    FONT_SIZE,
+    INTERFACE,
+    MARGIN,
+    MAX_ANIMATED,
+    OBJECT_PATH,
+    PADDING,
+    SETTING_ANIMATED,
+    SETTING_TOGGLE_CHAT,
+} from './constants.js';
 
 export default class ChatOverlayTest extends Extension {
     enable() {
@@ -73,6 +30,20 @@ export default class ChatOverlayTest extends Extension {
         this._linesBox = null;   // vertical container of message rows
         this._scrollView = null;
         this._newMessagesButton = null;
+        this._messageInput = null;
+        this._messageStatus = null;
+        this._profilePanel = null;
+        this._profileScroll = null;
+        this._profileCloseButton = null;
+        this._profileAvatar = null;
+        this._profileName = null;
+        this._profileDescription = null;
+        this._profileMessages = null;
+        this._requestedProfileLogin = '';
+        this._profileLiveMessages = [];
+        this._profileBaseMessages = [];
+        this._profileHistorySequence = null;
+        this._messageRequestSequence = 0;
         this._signalId = null;
         this._historySignalId = null;
         this._clearSignalId = null;
@@ -80,7 +51,10 @@ export default class ChatOverlayTest extends Extension {
         this._nameWatchId = null;
         this._scrollValueId = 0;
         this._scrollEventId = 0;
+        this._scrollPositionSourceId = 0;
+        this._scrollPositionRevision = 0;
         this._scrollSyncSourceId = 0;
+        this._scrollRestoreSourceId = 0;
         this._alive = true;
         this._backendAvailable = false;
         this._followingLatest = true;
@@ -93,6 +67,12 @@ export default class ChatOverlayTest extends Extension {
         this._maxVisibleMessages = DEFAULT_MAX_VISIBLE_MESSAGES;
         this._historyEnabled = false;
         this._historyLimit = 20;
+        this._disableClickThrough = false;
+        this._interactiveChatEnabled = false;
+        this._clickableProfilesEnabled = false;
+        this._usernameButtons = [];
+        this._messagePayloads = new WeakMap();
+        this._profileMessageLimit = 100;
         this._userHidden = false;
         this._toggleChatShortcut = '';
         this._keybindingRegistered = false;
@@ -104,12 +84,12 @@ export default class ChatOverlayTest extends Extension {
         // Hide during Activities Overview (alpha compositing bug).
         this._overviewShowingId = Main.overview.connect('showing', () => {
             this._overviewOpen = true;
-            if (this._box) this._box.hide();
+            this._syncOverlayVisibility();
             this._syncAnimatorPause();
         });
         this._overviewHidingId = Main.overview.connect('hiding', () => {
             this._overviewOpen = false;
-            if (this._box && !this._userHidden) this._box.show();
+            this._syncOverlayVisibility();
             this._syncAnimatorPause();
         });
 
@@ -200,8 +180,22 @@ export default class ChatOverlayTest extends Extension {
             });
             this._syncAnimatorPause();
             this._applyAnimationSetting();
+            this._rerenderMessages();
         }).catch(e => {
             console.warn(`[StreamShell] animated emotes unavailable: ${e}`);
+        });
+    }
+
+    _scheduleScrollRestore(value) {
+        if (this._scrollRestoreSourceId)
+            GLib.Source.remove(this._scrollRestoreSourceId);
+        this._scrollRestoreSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._scrollRestoreSourceId = 0;
+            if (!this._scrollView || this._followingLatest) return GLib.SOURCE_REMOVE;
+            const adjustment = this._scrollView.vadjustment;
+            const [, lower, upper, , , pageSize] = adjustment.get_values();
+            adjustment.set_value(Math.max(lower, Math.min(value, upper - pageSize)));
+            return GLib.SOURCE_REMOVE;
         });
     }
 
@@ -252,8 +246,40 @@ export default class ChatOverlayTest extends Extension {
     }
 
     _applyAnimationSetting() {
-        if (!this._animator || !this._settings) return;
-        this._animator.setEnabled(this._settings.get_boolean(SETTING_ANIMATED));
+        if (!this._settings ||
+            !this._settings.settings_schema.has_key(SETTING_ANIMATED))
+            return;
+        this._setAnimationEnabled(this._settings.get_boolean(SETTING_ANIMATED));
+    }
+
+    _setAnimationEnabled(enabled) {
+        if (this._settings?.settings_schema.has_key(SETTING_ANIMATED) &&
+            this._settings.get_boolean(SETTING_ANIMATED) !== enabled)
+            this._settings.set_boolean(SETTING_ANIMATED, enabled);
+        if (!this._animator) return;
+        this._animator.setEnabled(enabled);
+        if (enabled)
+            this._rerenderMessages();
+    }
+
+    _rerenderMessages() {
+        if (!this._linesBox) return;
+        for (const message of this._linesBox.get_children()) {
+            const data = this._messagePayloads.get(message);
+            if (!data)
+                continue;
+            message.destroy_all_children();
+            try {
+                renderMessage(this, message, data.user, data.color, data.payload);
+            } catch (error) {
+                console.error(`[StreamShell] failed to rerender message: ${error}\n${error.stack}`);
+                message.destroy();
+                renderFallbackMessage(this, data.user, data.payload);
+                this._messagePayloads.delete(message);
+            }
+        }
+        this._updateScrollView();
+        this._scheduleScrollToLatest();
     }
 
     _applyChatShortcutSetting() {
@@ -269,22 +295,62 @@ export default class ChatOverlayTest extends Extension {
     _toggleOverlay() {
         if (!this._backendAvailable || !this._box) return;
         this._userHidden = !this._userHidden;
-        if (this._userHidden || this._overviewOpen)
-            this._box.hide();
-        else
-            this._box.show();
+        this._syncOverlayVisibility();
         this._syncAnimatorPause();
+    }
+
+    _syncOverlayVisibility() {
+        const overlayVisible = this._backendAvailable && !this._userHidden && !this._overviewOpen;
+        if (this._box) {
+            if (overlayVisible)
+                this._box.show();
+            else
+                this._box.hide();
+        }
+        if (this._profilePanel) {
+            const profileVisible = overlayVisible &&
+                this._clickableProfilesEnabled && Boolean(this._requestedProfileLogin);
+            if (profileVisible)
+                this._profilePanel.show();
+            else
+                this._profilePanel.hide();
+        }
     }
 
     _onBackendAppeared() {
         console.log('[StreamShell] backend detected, showing overlay');
         this._backendAvailable = true;
         this._syncAnimatorPause();
+        this._requestOverlaySettings();
         try {
             this._showBox();
         } catch (e) {
             console.error(`[StreamShell] failed to show chat overlay: ${e}\n${e.stack}`);
         }
+    }
+
+    _requestOverlaySettings() {
+        Gio.DBus.session.call(
+            BUS_NAME,
+            OBJECT_PATH,
+            INTERFACE,
+            'GetOverlaySettings',
+            null,
+            new GLib.VariantType('(s)'),
+            Gio.DBusCallFlags.NONE,
+            5000,
+            null,
+            (connection, result) => {
+                try {
+                    const [payload] = connection.call_finish(result).deepUnpack();
+                    if (this._alive && this._backendAvailable)
+                        this._applyOverlaySettings(payload);
+                } catch (error) {
+                    if (this._alive && this._backendAvailable)
+                        console.warn(`[StreamShell] could not load backend overlay settings: ${error}`);
+                }
+            }
+        );
     }
 
     _onBackendVanished() {
@@ -297,6 +363,19 @@ export default class ChatOverlayTest extends Extension {
 
     _onChatCleared() {
         console.log('[StreamShell] chat cleared');
+        this._scrollPositionRevision++;
+        if (this._scrollPositionSourceId) {
+            GLib.Source.remove(this._scrollPositionSourceId);
+            this._scrollPositionSourceId = 0;
+        }
+        if (this._scrollSyncSourceId) {
+            GLib.Source.remove(this._scrollSyncSourceId);
+            this._scrollSyncSourceId = 0;
+        }
+        if (this._scrollRestoreSourceId) {
+            GLib.Source.remove(this._scrollRestoreSourceId);
+            this._scrollRestoreSourceId = 0;
+        }
         if (this._linesBox)
             this._linesBox.destroy_all_children();
         if (this._label)
@@ -308,6 +387,14 @@ export default class ChatOverlayTest extends Extension {
         this._followingLatest = true;
         if (this._newMessagesButton)
             this._newMessagesButton.hide();
+        if (this._profilePanel)
+            this._profilePanel.hide();
+        this._requestedProfileLogin = '';
+        this._profileLiveMessages = [];
+        this._profileBaseMessages = [];
+        this._profileHistorySequence = null;
+        if (this._messageStatus)
+            this._messageStatus.hide();
         this._syncAnimatorPause();
     }
 
@@ -327,6 +414,17 @@ export default class ChatOverlayTest extends Extension {
             if (Number.isInteger(settings.historyLimit) &&
                 settings.historyLimit >= 5 && settings.historyLimit <= 100)
                 this._historyLimit = settings.historyLimit;
+            if (typeof settings.disableClickThrough === 'boolean')
+                this._disableClickThrough = settings.disableClickThrough;
+            if (typeof settings.interactiveChatEnabled === 'boolean')
+                this._interactiveChatEnabled = settings.interactiveChatEnabled;
+            if (typeof settings.clickableProfilesEnabled === 'boolean')
+                this._clickableProfilesEnabled = settings.clickableProfilesEnabled;
+            if (typeof settings.animatedEmotesEnabled === 'boolean')
+                this._setAnimationEnabled(settings.animatedEmotesEnabled);
+            if (Number.isInteger(settings.profileMessageLimit) &&
+                settings.profileMessageLimit >= 1 && settings.profileMessageLimit <= 500)
+                this._profileMessageLimit = settings.profileMessageLimit;
             if (typeof settings.toggleChatShortcut === 'string') {
                 this._toggleChatShortcut = settings.toggleChatShortcut;
                 this._applyChatShortcutSetting();
@@ -335,10 +433,18 @@ export default class ChatOverlayTest extends Extension {
                 this._box.width = this._chatWidth;
                 this._box.set_style(this._boxStyle());
             }
-            this._updateScrollView();
+            if (this._profilePanel)
+                this._profilePanel.width = this._chatWidth - PADDING * 2;
+            this._applyClickThrough();
+            if (!this._clickableProfilesEnabled) {
+                this._requestedProfileLogin = '';
+                if (this._profilePanel)
+                    this._profilePanel.hide();
+            }
             if (!this._historyEnabled)
                 this._setFollowingLatest(true);
             this._trimMessages();
+            this._updateScrollView();
             this._syncAnimatorPause();
             this._reposition();
         } catch (e) {
@@ -360,8 +466,8 @@ export default class ChatOverlayTest extends Extension {
 
         const scrollView = new St.ScrollView({
             width: this._chatWidth - PADDING * 2,
-            height: this._maxVisibleMessages * MESSAGE_HEIGHT,
-            reactive: true,
+            height: 1,
+            reactive: false,
             x_expand: true,
         });
         scrollView.set_policy(St.PolicyType.NEVER, St.PolicyType.AUTOMATIC);
@@ -370,12 +476,95 @@ export default class ChatOverlayTest extends Extension {
 
         const newMessagesButton = new St.Button({
             label: T('latest'),
-            can_focus: true,
-            reactive: true,
+            can_focus: false,
+            reactive: false,
             style: 'margin-top: 4px; padding: 4px 8px; border-radius: 6px; background-color: rgba(145,70,255,0.9); color: white; font-size: 12px;',
         });
         newMessagesButton.hide();
         newMessagesButton.connect('clicked', () => this._followLatest());
+
+        const messageInput = new St.Entry({
+            hint_text: T('messagePlaceholder'),
+            can_focus: false,
+            reactive: false,
+            track_hover: true,
+            style: `margin-top: 6px; padding: 6px 8px; border-radius: 6px; background-color: rgba(20,20,23,0.95); color: white; font-size: ${FONT_SIZE}px;`,
+        });
+        messageInput.visible = this._interactiveChatEnabled;
+        messageInput.clutter_text.connect('activate', () => this._sendOverlayMessage());
+
+        const profilePanel = new St.BoxLayout({
+            vertical: true,
+            reactive: false,
+            width: this._chatWidth - PADDING * 2,
+            style: 'margin-top: 6px; padding: 8px; spacing: 6px; background-color: rgba(20,20,23,0.98); border-radius: 8px;',
+        });
+        const profileHeader = new St.BoxLayout({
+            vertical: false,
+            style: 'spacing: 8px;',
+            x_expand: true,
+        });
+        const profileAvatar = new St.Icon({
+            icon_name: 'avatar-default-symbolic',
+            icon_size: 48,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        const profileName = new St.Label({
+            text: '',
+            style: 'color: white; font-weight: bold; font-size: 15px;',
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true,
+        });
+        const profileCloseButton = new St.Button({
+            label: '×',
+            can_focus: false,
+            reactive: false,
+            style: 'padding: 2px 8px; border-radius: 4px; background-color: rgba(145,70,255,0.8); color: white;',
+        });
+        profileCloseButton.accessible_name = T('closeProfile');
+        profileCloseButton.connect('clicked', () => {
+            this._requestedProfileLogin = '';
+            this._syncOverlayVisibility();
+        });
+        profileHeader.add_child(profileAvatar);
+        profileHeader.add_child(profileName);
+        profileHeader.add_child(profileCloseButton);
+        const profileDescription = new St.Label({
+            text: '',
+            style: 'color: rgba(255,255,255,0.8); font-size: 13px;',
+            x_expand: true,
+        });
+        profileDescription.get_clutter_text().set_line_wrap(true);
+        const profileMessages = new St.Label({
+            text: '',
+            style: 'color: rgba(255,255,255,0.8); font-size: 13px;',
+            x_expand: true,
+        });
+        profileMessages.get_clutter_text().set_line_wrap(true);
+        const profileScroll = new St.ScrollView({
+            height: 150,
+            reactive: false,
+            x_expand: true,
+        });
+        const profileMessagesContainer = new St.BoxLayout({
+            vertical: true,
+            x_expand: true,
+        });
+        profileMessagesContainer.add_child(profileMessages);
+        profileScroll.set_policy(St.PolicyType.NEVER, St.PolicyType.AUTOMATIC);
+        profileScroll.set_child(profileMessagesContainer);
+        profilePanel.add_child(profileHeader);
+        profilePanel.add_child(new St.Label({
+            text: T('profileAbout'),
+            style: 'color: #bf94ff; font-weight: bold; font-size: 13px;',
+        }));
+        profilePanel.add_child(profileDescription);
+        profilePanel.add_child(new St.Label({
+            text: T('profileMessages'),
+            style: 'color: #bf94ff; font-weight: bold; font-size: 13px;',
+        }));
+        profilePanel.add_child(profileScroll);
+        profilePanel.hide();
 
         const box = new St.BoxLayout({
             vertical: true,
@@ -388,33 +577,230 @@ export default class ChatOverlayTest extends Extension {
         box.add_child(label);
         box.add_child(scrollView);
         box.add_child(newMessagesButton);
+        box.add_child(messageInput);
+        const messageStatus = new St.Label({
+            text: '',
+            style: 'margin-top: 4px; color: rgba(255,255,255,0.85); font-size: 12px;',
+        });
+        messageStatus.get_clutter_text().set_line_wrap(true);
+        messageStatus.hide();
+        box.add_child(messageStatus);
 
-        return {box, label, linesBox, scrollView, newMessagesButton};
+        return {
+            box,
+            label,
+            linesBox,
+            scrollView,
+            newMessagesButton,
+            messageInput,
+            messageStatus,
+            profilePanel,
+            profileScroll,
+            profileCloseButton,
+            profileAvatar,
+            profileName,
+            profileDescription,
+            profileMessages,
+        };
     }
 
     _boxStyle() {
         return `background-color: rgba(0,0,0,${this._backgroundOpacity / 100}); border-radius: 12px; padding: ${PADDING}px;`;
     }
 
+    _sendOverlayMessage() {
+        if (!this._messageInput || !this._interactiveChatEnabled) {
+            console.warn('[StreamShell] Chat send skipped: input is unavailable or interactive chat is disabled.');
+            return;
+        }
+        const text = this._messageInput.get_text().trim();
+        if (!text) {
+            console.warn('[StreamShell] Chat send skipped: message is empty.');
+            return;
+        }
+
+        const requestId =
+            `${Date.now().toString(36)}-${(++this._messageRequestSequence).toString(36)}`;
+        console.log(
+            `[StreamShell] [chat:${requestId}] submitting message to D-Bus (length=${text.length}).`
+        );
+        this._messageInput.clutter_text.editable = false;
+        if (this._messageStatus) {
+            this._messageStatus.set_text(T('sendingMessage'));
+            this._messageStatus.show();
+        }
+        try {
+            Gio.DBus.session.call(
+                BUS_NAME,
+                OBJECT_PATH,
+                INTERFACE,
+                'SendChatMessage',
+                new GLib.Variant('(ss)', [requestId, text]),
+                new GLib.VariantType('(s)'),
+                Gio.DBusCallFlags.NONE,
+                5000,
+                null,
+                (connection, result) => {
+                    try {
+                        if (!this._messageInput) return;
+                        const response = connection.call_finish(result);
+                        const [status] = response.deepUnpack();
+                        if (status === 'sent') {
+                            console.log(`[StreamShell] [chat:${requestId}] backend confirmed IRC client acceptance.`);
+                            if (this._messageInput?.get_text().trim() === text)
+                                this._messageInput.set_text('');
+                            if (this._messageStatus) {
+                                this._messageStatus.set_text(T('messageSent'));
+                                this._messageStatus.show();
+                            }
+                        } else {
+                            console.warn(
+                                `[StreamShell] [chat:${requestId}] backend returned unexpected status: ${String(status)}.`
+                            );
+                        }
+                    } catch (error) {
+                        console.error(
+                            `[StreamShell] [chat:${requestId}] D-Bus send call failed or timed out: ${error}`
+                        );
+                        if (this._messageStatus) {
+                            this._messageStatus.set_text(T('messageSendFailed'));
+                            this._messageStatus.show();
+                        }
+                    } finally {
+                        if (this._messageInput)
+                            this._messageInput.clutter_text.editable =
+                                this._interactiveChatEnabled && this._disableClickThrough;
+                    }
+                }
+            );
+        } catch (error) {
+            console.error(`[StreamShell] [chat:${requestId}] could not start D-Bus send call: ${error}`);
+            this._messageInput.clutter_text.editable =
+                this._interactiveChatEnabled && this._disableClickThrough;
+            if (this._messageStatus) {
+                this._messageStatus.set_text(T('messageSendFailed'));
+                this._messageStatus.show();
+            }
+        }
+    }
+
+    _showUserProfile(login) {
+        if (!this._clickableProfilesEnabled || !this._profilePanel) return;
+        if (!/^[a-z0-9_]{1,25}$/i.test(login)) return;
+        if (this._profilePanel.visible && this._requestedProfileLogin === login.toLowerCase()) {
+            this._requestedProfileLogin = '';
+            this._syncOverlayVisibility();
+            return;
+        }
+
+        this._profileName.set_text(login);
+        this._requestedProfileLogin = login.toLowerCase();
+        this._profileAvatar.set_icon_name('avatar-default-symbolic');
+        this._profileDescription.set_text(T('profileLoading'));
+        this._profileMessages.set_text('');
+        this._profileLiveMessages = [];
+        this._profileBaseMessages = [];
+        this._profileHistorySequence = null;
+        this._syncOverlayVisibility();
+
+        Gio.DBus.session.call(
+            BUS_NAME,
+            OBJECT_PATH,
+            INTERFACE,
+            'GetUserProfile',
+            new GLib.Variant('(s)', [login]),
+            new GLib.VariantType('(s)'),
+            Gio.DBusCallFlags.NONE,
+            15000,
+            null,
+            (connection, result) => {
+                try {
+                    if (!this._profilePanel || !this._profileName ||
+                        !this._profileAvatar || !this._profileDescription || !this._profileMessages)
+                        return;
+                    const response = connection.call_finish(result);
+                    const [payload] = response.deepUnpack();
+                    const profile = JSON.parse(payload);
+                    if (this._requestedProfileLogin !== login.toLowerCase() ||
+                        profile.login !== login.toLowerCase())
+                        return;
+                    this._profileName.set_text(profile.displayName || profile.login);
+                    this._profileDescription.set_text(
+                        typeof profile.description === 'string' && profile.description
+                            ? profile.description.slice(0, 1000)
+                            : T('profileUnavailable')
+                    );
+                    if (typeof profile.avatarPath === 'string' && profile.avatarPath.startsWith('/')) {
+                        this._profileAvatar.set_gicon(
+                            new Gio.FileIcon({file: Gio.File.new_for_path(profile.avatarPath)})
+                        );
+                    }
+                    const messages = Array.isArray(profile.messages)
+                        ? profile.messages.flatMap(message => {
+                            if (typeof message === 'string')
+                                return [{sequence: null, text: message}];
+                            if (message && Number.isInteger(message.sequence) &&
+                                typeof message.text === 'string')
+                                return [{sequence: message.sequence, text: message.text}];
+                            return [];
+                        })
+                        : [];
+                    this._profileHistorySequence = Number.isInteger(profile.lastSequence)
+                        ? profile.lastSequence
+                        : -1;
+                    this._profileBaseMessages = messages;
+                    const liveMessages = this._profileLiveMessages.filter(message =>
+                        message.sequence > this._profileHistorySequence
+                    );
+                    this._setProfileMessages([...this._profileBaseMessages, ...liveMessages]);
+                } catch (error) {
+                    if (this._requestedProfileLogin !== login.toLowerCase()) return;
+                    console.error(`[StreamShell] could not load Twitch profile: ${error}`);
+                    this._profileBaseMessages = [];
+                    this._profileDescription.set_text(T('profileUnavailable'));
+                    this._profileMessages.set_text(T('profileNoMessages'));
+                }
+            }
+        );
+    }
+
     _showBox() {
         if (this._box) return;
 
-        const {box, label, linesBox, scrollView, newMessagesButton} = this._buildBox();
+        const {
+            box, label, linesBox, scrollView, newMessagesButton, messageInput, messageStatus,
+            profilePanel, profileScroll, profileCloseButton, profileAvatar, profileName,
+            profileDescription, profileMessages,
+        } = this._buildBox();
         this._box = box;
         this._label = label;
         this._linesBox = linesBox;
         this._scrollView = scrollView;
         this._newMessagesButton = newMessagesButton;
+        this._messageInput = messageInput;
+        this._messageStatus = messageStatus;
+        this._profilePanel = profilePanel;
+        this._profileScroll = profileScroll;
+        this._profileCloseButton = profileCloseButton;
+        this._profileAvatar = profileAvatar;
+        this._profileName = profileName;
+        this._profileDescription = profileDescription;
+        this._profileMessages = profileMessages;
+        this._usernameButtons = [];
+        this._applyClickThrough();
         Main.uiGroup.add_child(this._box);
+        Main.uiGroup.add_child(this._profilePanel);
+        this._syncOverlayVisibility();
 
         try {
-            this._scrollValueId = scrollView.vadjustment.connect('notify', () => {
-                if (this._followingLatest)
-                    this._scheduleScrollToLatest();
-            });
             this._scrollEventId = scrollView.connect('scroll-event', () => {
-                GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-                    this._syncFollowFromPosition();
+                const revision = ++this._scrollPositionRevision;
+                if (this._scrollPositionSourceId)
+                    GLib.Source.remove(this._scrollPositionSourceId);
+                this._scrollPositionSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                    this._scrollPositionSourceId = 0;
+                    if (revision === this._scrollPositionRevision)
+                        this._syncFollowFromPosition();
                     return GLib.SOURCE_REMOVE;
                 });
                 return Clutter.EVENT_PROPAGATE;
@@ -423,11 +809,7 @@ export default class ChatOverlayTest extends Extension {
             console.warn(`[StreamShell] scroll controls unavailable; chat remains active: ${e}`);
         }
 
-        // If the Overview is currently open, start hidden.
-        if (this._overviewOpen || this._userHidden) {
-            this._box.hide();
-        }
-
+        this._updateScrollView();
         this._reposition();
     }
 
@@ -439,36 +821,116 @@ export default class ChatOverlayTest extends Extension {
             this._scrollView.disconnect(this._scrollEventId);
         this._scrollValueId = 0;
         this._scrollEventId = 0;
+        this._scrollPositionRevision++;
+        if (this._scrollPositionSourceId) {
+            GLib.Source.remove(this._scrollPositionSourceId);
+            this._scrollPositionSourceId = 0;
+        }
         if (this._scrollSyncSourceId) {
             GLib.Source.remove(this._scrollSyncSourceId);
             this._scrollSyncSourceId = 0;
         }
+        if (this._scrollRestoreSourceId) {
+            GLib.Source.remove(this._scrollRestoreSourceId);
+            this._scrollRestoreSourceId = 0;
+        }
         this._box.destroy();
+        if (this._profilePanel)
+            this._profilePanel.destroy();
         this._box = null;
         this._label = null;
         this._linesBox = null;
         this._scrollView = null;
         this._newMessagesButton = null;
+        this._messageInput = null;
+        this._messageStatus = null;
+        this._profilePanel = null;
+        this._profileScroll = null;
+        this._profileCloseButton = null;
+        this._profileAvatar = null;
+        this._profileName = null;
+        this._profileDescription = null;
+        this._profileMessages = null;
+        this._usernameButtons = [];
+        this._requestedProfileLogin = '';
+        this._profileLiveMessages = [];
+        this._profileBaseMessages = [];
+        this._profileHistorySequence = null;
     }
 
     _updateScrollView() {
         if (!this._scrollView) return;
         this._scrollView.width = this._chatWidth - PADDING * 2;
-        this._scrollView.height = this._maxVisibleMessages * MESSAGE_HEIGHT;
+        const rows = this._linesBox?.get_children() ?? [];
+        const contentHeight = rows.reduce(
+            (height, row) => height + row.get_preferred_height(this._chatWidth - PADDING * 2)[1],
+            Math.max(0, rows.length - 1) * 4
+        );
+        const monitor = Main.layoutManager.primaryMonitor;
+        const availableHeight = monitor
+            ? Math.max(120, monitor.height - Math.max(Main.panel.height, 32) - MARGIN * 2)
+            : this._maxVisibleMessages * (EMOTE_SIZE + 4);
+        const fixedHeight = Math.max(
+            1,
+            Math.min(this._maxVisibleMessages * (EMOTE_SIZE + 4), availableHeight)
+        );
+        this._scrollView.height = fixedHeight;
         this._scrollView.set_policy(
             St.PolicyType.NEVER,
-            this._historyEnabled ? St.PolicyType.AUTOMATIC : St.PolicyType.NEVER
+            this._historyEnabled || contentHeight > fixedHeight
+                ? St.PolicyType.AUTOMATIC
+                : St.PolicyType.NEVER
         );
+        this._applyClickThrough();
+    }
+
+    _applyClickThrough() {
+        const canInteract = this._disableClickThrough;
+        if (this._box)
+            this._box.reactive = canInteract;
+        if (this._profilePanel)
+            this._profilePanel.reactive = canInteract && this._clickableProfilesEnabled;
+        if (this._scrollView)
+            this._scrollView.reactive =
+                canInteract && (this._historyEnabled || this._clickableProfilesEnabled);
+        if (this._newMessagesButton) {
+            this._newMessagesButton.reactive = canInteract && this._historyEnabled;
+            this._newMessagesButton.can_focus = canInteract && this._historyEnabled;
+        }
+        if (this._messageInput) {
+            this._messageInput.visible = this._interactiveChatEnabled;
+            this._messageInput.reactive = canInteract && this._interactiveChatEnabled;
+            this._messageInput.can_focus = canInteract && this._interactiveChatEnabled;
+        }
+        if (this._profileScroll)
+            this._profileScroll.reactive = canInteract && this._clickableProfilesEnabled;
+        if (this._profileCloseButton) {
+            this._profileCloseButton.reactive = canInteract && this._clickableProfilesEnabled;
+            this._profileCloseButton.can_focus = canInteract && this._clickableProfilesEnabled;
+        }
+        const usernamesInteractive = canInteract && this._clickableProfilesEnabled;
+        for (const button of this._usernameButtons) {
+            button.reactive = usernamesInteractive;
+            button.can_focus = usernamesInteractive;
+        }
     }
 
     _trimMessages() {
-        if (!this._linesBox) return;
+        if (!this._linesBox) return 0;
         const limit = this._historyEnabled
             ? this._historyLimit
             : this._maxVisibleMessages;
         const rows = this._linesBox.get_children();
-        for (let i = 0; i < rows.length - limit; i++)
+        const removeCount = Math.max(0, rows.length - limit);
+        let removedHeight = 0;
+        for (let i = 0; i < removeCount; i++) {
+            removedHeight += rows[i].get_preferred_height(this._chatWidth - PADDING * 2)[1];
             rows[i].destroy();
+        }
+        const removedGaps = rows.length - removeCount > 0
+            ? removeCount
+            : Math.max(0, removeCount - 1);
+        return removedHeight + removedGaps * 4;
     }
 
     _scrollToLatest() {
@@ -479,6 +941,10 @@ export default class ChatOverlayTest extends Extension {
     }
 
     _scheduleScrollToLatest() {
+        if (this._scrollRestoreSourceId) {
+            GLib.Source.remove(this._scrollRestoreSourceId);
+            this._scrollRestoreSourceId = 0;
+        }
         if (this._scrollSyncSourceId) return;
         this._scrollSyncSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._scrollSyncSourceId = 0;
@@ -489,8 +955,6 @@ export default class ChatOverlayTest extends Extension {
     }
 
     _setFollowingLatest(following) {
-        if (!this._historyEnabled)
-            following = true;
         if (this._followingLatest === following) return;
         this._followingLatest = following;
         if (this._newMessagesButton) {
@@ -505,10 +969,22 @@ export default class ChatOverlayTest extends Extension {
     _syncFollowFromPosition() {
         if (!this._scrollView) return;
         const [value, , upper, , , pageSize] = this._scrollView.vadjustment.get_values();
-        this._setFollowingLatest(upper - (value + pageSize) <= 4);
+        if (upper - (value + pageSize) <= 4)
+            this._setFollowingLatest(true);
+        else
+            this._setFollowingLatest(false);
     }
 
     _followLatest() {
+        this._scrollPositionRevision++;
+        if (this._scrollPositionSourceId) {
+            GLib.Source.remove(this._scrollPositionSourceId);
+            this._scrollPositionSourceId = 0;
+        }
+        if (this._scrollRestoreSourceId) {
+            GLib.Source.remove(this._scrollRestoreSourceId);
+            this._scrollRestoreSourceId = 0;
+        }
         this._setFollowingLatest(true);
         this._scrollToLatest();
         this._scheduleScrollToLatest();
@@ -546,141 +1022,12 @@ export default class ChatOverlayTest extends Extension {
         });
     }
 
-    _makeWord(word, style) {
-        return new St.Label({
-            text: word,
-            style,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-    }
-
-    _parsePayload(payload) {
-        try {
-            const p = JSON.parse(payload);
-            return {
-                badges: Array.isArray(p.badges) ? p.badges : [],
-                segments: Array.isArray(p.segments) ? p.segments : [],
-                reply: p.reply && typeof p.reply.user === 'string'
-                    ? {
-                        user: p.reply.user,
-                        message: typeof p.reply.message === 'string' ? p.reply.message : '',
-                    }
-                    : null,
-            };
-        } catch (_e) {
-            // Older backend: the third argument was plain text.
-            return {badges: [], segments: [{t: 'text', v: String(payload)}], reply: null};
-        }
-    }
-
-    _addReplyHeader(msg, reply) {
-        const replyRow = new St.BoxLayout({
-            vertical: false,
-            reactive: false,
-            style: 'spacing: 4px;',
-        });
-        const iconFile = this.dir.get_child('reply.svg');
-        replyRow.add_child(new St.Icon({
-            gicon: new Gio.FileIcon({file: iconFile}),
-            icon_size: 16,
-            y_align: Clutter.ActorAlign.CENTER,
-            style: 'color: rgba(255,255,255,0.75);',
-        }));
-
-        const quotedMessage = reply.message.replace(/\s+/g, ' ').trim();
-        const quote = quotedMessage.length > 96
-            ? `${quotedMessage.slice(0, 95)}…`
-            : quotedMessage;
-        const text = `${T('replyTo')} @${reply.user}${quote ? `: ${quote}` : ''}`;
-        const label = this._makeWord(
-            text,
-            `color: rgba(255,255,255,0.75); font-size: 13px;`
-        );
-        label.width = this._chatWidth - PADDING * 2 - 20;
-        label.get_clutter_text().set_line_wrap(true);
-        replyRow.add_child(label);
-        msg.add_child(replyRow);
-    }
-
-    _newRow(msg) {
-        const row = new St.BoxLayout({
-            vertical: false,
-            reactive: false,
-            style: 'spacing: 4px;',
-        });
-        msg.add_child(row);
-        return row;
-    }
-
-    // Clutter.FlowLayout is a column-aligned grid, not inline text flow, so
-    // wrapping is done by hand: add a child, measure the row, and if it no
-    // longer fits, move that child to a new row. `msg` must already be
-    // attached to the stage so widths are measured with the real theme.
-    _fillMessage(msg, user, color, payload) {
-        const {badges, segments, reply} = this._parsePayload(payload);
-        const safeColor = /^#[0-9A-Fa-f]{6}$/.test(color) ? color : DEFAULT_COLOR;
-        const textStyle = `color: white; font-size: ${FONT_SIZE}px;`;
-
-        if (reply)
-            this._addReplyHeader(msg, reply);
-
-        let row = this._newRow(msg);
-        const add = (actor) => {
-            row.add_child(actor);
-            if (row.get_n_children() > 1 &&
-                row.get_preferred_width(-1)[1] > this._chatWidth - PADDING * 2) {
-                row.remove_child(actor);
-                row = this._newRow(msg);
-                row.add_child(actor);
-            }
-        };
-
-        for (const badgePath of badges) {
-            const icon = this._makeIcon(badgePath, BADGE_SIZE);
-            if (icon) add(icon);
-        }
-
-        add(this._makeWord(
-            `${user}:`,
-            `color: ${safeColor}; font-weight: bold; font-size: ${FONT_SIZE}px;`
-        ));
-
-        for (const seg of segments) {
-            if (seg.t === 'emote') {
-                const icon = this._makeIcon(seg.path, EMOTE_SIZE, seg.animated !== false, true);
-                // If the icon can't be built, fall back to the emote's name.
-                if (icon) add(icon);
-                else if (seg.name) add(this._makeWord(String(seg.name), textStyle));
-            } else if (seg.t === 'text' && typeof seg.v === 'string') {
-                for (const word of seg.v.split(/\s+/)) {
-                    if (!word) continue;
-                    for (let i = 0; i < word.length; i += MAX_WORD_LEN)
-                        add(this._makeWord(word.slice(i, i + MAX_WORD_LEN), textStyle));
-                }
-            }
-        }
-    }
-
-    _addFallbackLine(user, payload) {
-        const {segments, reply} = this._parsePayload(payload);
-        const text = segments
-            .map(s => (s.t === 'emote' ? (s.name ?? '') : (s.v ?? '')))
-            .join('')
-            .trim();
-        const replyText = reply
-            ? `${T('replyTo')} @${reply.user}${reply.message ? `: ${reply.message}` : ''}\n`
-            : '';
-        const label = new St.Label({
-            text: `${replyText}${user}: ${text}`,
-            style: `color: white; font-size: ${FONT_SIZE}px;`,
-            width: this._chatWidth - PADDING * 2,
-        });
-        label.get_clutter_text().set_line_wrap(true);
-        this._linesBox.add_child(label);
-    }
-
     _onMessageReceived(user, color, payload, fromHistory = false) {
         if (!this._linesBox || !this._scrollView) return;
+        if (!fromHistory)
+            this._appendLiveProfileMessage(payload);
+        const wasFollowingLatest = this._followingLatest;
+        const previousScrollValue = this._scrollView.vadjustment.value;
 
         if (this._label) this._label.hide();
         this._scrollView.show();
@@ -692,21 +1039,61 @@ export default class ChatOverlayTest extends Extension {
             style: 'spacing: 2px;',
         });
         this._linesBox.add_child(msg);
+        this._messagePayloads.set(msg, {user, color, payload});
 
         try {
-            this._fillMessage(msg, user, color, payload);
+            renderMessage(this, msg, user, color, payload);
         } catch (e) {
             // Show the message as plain text rather than dropping it.
             console.error(`[StreamShell] failed to render message: ${e}\n${e.stack}`);
             msg.destroy();
-            this._addFallbackLine(user, payload);
+            renderFallbackMessage(this, user, payload);
         }
 
-        this._trimMessages();
-        if (fromHistory)
+        const removedHeight = this._trimMessages();
+        this._updateScrollView();
+        if (fromHistory) {
             this._setFollowingLatest(true);
-        if (this._followingLatest)
             this._scheduleScrollToLatest();
+        } else if (wasFollowingLatest) {
+            this._scheduleScrollToLatest();
+        } else {
+            this._scheduleScrollRestore(Math.max(0, previousScrollValue - removedHeight));
+        }
+    }
+
+    _appendLiveProfileMessage(payload) {
+        if (!this._requestedProfileLogin) return;
+        try {
+            const message = JSON.parse(payload);
+            if (typeof message.login !== 'string' ||
+                message.login.toLowerCase() !== this._requestedProfileLogin ||
+                !Number.isInteger(message.sequence) ||
+                typeof message.text !== 'string')
+                return;
+            const entry = {sequence: message.sequence, text: message.text};
+            this._profileLiveMessages.push(entry);
+            this._profileLiveMessages = this._profileLiveMessages.slice(-this._profileMessageLimit);
+            if (this._profileHistorySequence !== null &&
+                entry.sequence > this._profileHistorySequence)
+                this._setProfileMessages([
+                    ...this._profileBaseMessages,
+                    ...this._profileLiveMessages.filter(item =>
+                        item.sequence > this._profileHistorySequence
+                    ),
+                ]);
+        } catch (error) {
+            console.warn(`[StreamShell] could not update live profile history: ${error}`);
+        }
+    }
+
+    _setProfileMessages(messages) {
+        if (!this._profileMessages) return;
+        const texts = messages
+            .map(message => typeof message === 'string' ? message : message.text)
+            .filter(message => typeof message === 'string' && message.length > 0)
+            .slice(-this._profileMessageLimit);
+        this._profileMessages.set_text(texts.length ? texts.join('\n') : T('profileNoMessages'));
     }
 
     _reposition() {
@@ -714,7 +1101,15 @@ export default class ChatOverlayTest extends Extension {
         const m = Main.layoutManager.primaryMonitor;
         if (!m) return;
         const panelH = Math.max(Main.panel.height, 32);
-        this._box.set_position(m.x + m.width - this._chatWidth - MARGIN, m.y + panelH + MARGIN);
+        const chatX = m.x + m.width - this._chatWidth - MARGIN;
+        this._box.set_position(chatX, m.y + panelH + MARGIN);
+        if (this._profilePanel) {
+            const availableWidth = Math.max(220, chatX - (m.x + MARGIN) - MARGIN);
+            const profileWidth = Math.min(420, availableWidth);
+            this._profilePanel.width = profileWidth;
+            const profileX = Math.max(m.x + MARGIN, chatX - profileWidth - MARGIN);
+            this._profilePanel.set_position(profileX, m.y + panelH + MARGIN);
+        }
     }
 
     disable() {
