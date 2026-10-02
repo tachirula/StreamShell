@@ -19,17 +19,30 @@ panel for connection and preferences. The Electron main process reads Twitch
 chat and resolves assets; the GNOME extension renders the overlay over the
 desktop.
 
+
+### Connect and watch the chat come alive
+
 <p align="center">
   <img src="./.github/assets/first.gif" alt="StreamShell demo 1" width="700">
 </p>
+
+Log in with your Twitch account (not required), choose your channel and see your chat appear right on your screen. Messages show up instantly, complete with Twitch emotes, BTTV, FFZ and 7TV.
+
+### Make it yours
 
 <p align="center">
   <img src="./.github/assets/second.gif" alt="StreamShell demo 2" width="700">
 </p>
 
+Resize the overlay, send messages right from it, adjust the transparency, or hide it with a single click whenever you want.
+
+### Chat that stays out of your way
+
 <p align="center">
   <img src="./.github/assets/gameplay.gif" alt="StreamShell overlay during gameplay" width="700">
 </p>
+
+Your chat floats over the game. Perfect if you want to keep up with your viewers on a single screen.
 
 See the [documentation index](./docs/README.md) for installation, development,
 research references, and architecture diagrams.
