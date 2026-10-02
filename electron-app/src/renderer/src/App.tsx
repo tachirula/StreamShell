@@ -1,15 +1,9 @@
-import {
-  useState,
-  useEffect,
-  useRef,
-  type CSSProperties,
-  type KeyboardEvent,
-  type ReactElement
-} from 'react'
-import { MAX_CONCURRENT_IMAGE_DOWNLOADS } from '../../shared/settings-constraints'
+import { useCallback, useState, useEffect, useRef, type ReactElement } from 'react'
 import twitchLogo from './assets/twitch-logo.png'
 import { t } from './i18n'
-import { clearAvatarCache, getCachedAvatar, setCachedAvatar } from './avatar-cache'
+import { getCachedAvatar, setCachedAvatar } from './avatar-cache'
+import { SettingsPanel } from './components/SettingsPanel'
+import type { Preferences, TwitchAuthStatus } from './components/types'
 
 // --- Integrated SVG icons ---
 const LoadingIcon = (): ReactElement => (
@@ -64,597 +58,9 @@ const SettingsIcon = (): ReactElement => (
 
 type Status = 'idle' | 'connecting' | 'connected' | 'error'
 
-interface Preferences {
-  chatWidth: number
-  backgroundOpacity: number
-  maxVisibleMessages: number
-  historyEnabled: boolean
-  historyLimit: number
-  thirdPartyEmotesEnabled: boolean
-  toggleChatShortcut: string
-  emoteImageScale: '1x' | '3x' | '4x'
-  emoteBestQuality: boolean
-  maxConcurrentImageDownloads: number
-}
-
 interface GnomeWarningView {
   key: string
   params?: Record<string, string>
-}
-
-function acceleratorKey(event: KeyboardEvent<HTMLElement>): string | null {
-  const namedKeys: Record<string, string> = {
-    Backspace: 'BackSpace',
-    CapsLock: 'Caps_Lock',
-    Delete: 'Delete',
-    End: 'End',
-    Enter: 'Return',
-    Home: 'Home',
-    Insert: 'Insert',
-    PageDown: 'Page_Down',
-    PageUp: 'Page_Up',
-    PrintScreen: 'Print',
-    ScrollLock: 'Scroll_Lock',
-    Space: 'space',
-    Tab: 'Tab',
-    ArrowDown: 'Down',
-    ArrowLeft: 'Left',
-    ArrowRight: 'Right',
-    ArrowUp: 'Up'
-  }
-  if (namedKeys[event.key]) return namedKeys[event.key]
-  if (/^F([1-9]|1[0-2])$/.test(event.key)) return event.key
-  if (/^[a-zA-Z0-9]$/.test(event.key)) return event.key.toLowerCase()
-
-  const codeKeys: Record<string, string> = {
-    Minus: 'minus',
-    Equal: 'equal',
-    BracketLeft: 'bracketleft',
-    BracketRight: 'bracketright',
-    Backslash: 'backslash',
-    Semicolon: 'semicolon',
-    Quote: 'apostrophe',
-    Backquote: 'grave',
-    Comma: 'comma',
-    Period: 'period',
-    Slash: 'slash',
-    NumpadAdd: 'KP_Add',
-    NumpadSubtract: 'KP_Subtract',
-    NumpadMultiply: 'KP_Multiply',
-    NumpadDivide: 'KP_Divide',
-    NumpadDecimal: 'KP_Decimal',
-    NumpadEnter: 'KP_Enter'
-  }
-  return codeKeys[event.code] ?? null
-}
-
-function formatAccelerator(accelerator: string): string {
-  return accelerator
-    .replaceAll('<Control>', 'Ctrl')
-    .replaceAll('<Shift>', 'Shift')
-    .replaceAll('<Alt>', 'Alt')
-    .replaceAll('<Mod5>', 'AltGr')
-}
-
-function formatShortcut(shortcut: string): string {
-  const modifiers: string[] = []
-  const key = shortcut.replace(/<(Control|Shift|Alt|Mod5)>/g, (modifier) => {
-    modifiers.push(formatAccelerator(modifier))
-    return ''
-  })
-  const keyLabels: Record<string, string> = {
-    BackSpace: 'Backspace',
-    Caps_Lock: 'Caps Lock',
-    Page_Down: 'Page Down',
-    Page_Up: 'Page Up',
-    Print: 'Print Screen',
-    Scroll_Lock: 'Scroll Lock',
-    space: 'Space'
-  }
-  const keyLabel = keyLabels[key] ?? (/^[a-z]$/.test(key) ? key.toUpperCase() : key)
-  return [...modifiers, keyLabel].join(' + ')
-}
-
-function SettingsPanel({
-  preferences,
-  preferencesError,
-  onChange,
-  connected
-}: {
-  preferences: Preferences | null
-  preferencesError: string | null
-  onChange: (update: Partial<Preferences>) => void
-  connected: boolean
-}): ReactElement {
-  const [cacheBusy, setCacheBusy] = useState(false)
-  const [cacheMessage, setCacheMessage] = useState('')
-  const [recordingShortcut, setRecordingShortcut] = useState(false)
-  const [shortcutHint, setShortcutHint] = useState('')
-
-  const clearCache = async (): Promise<void> => {
-    setCacheBusy(true)
-    setCacheMessage('')
-    try {
-      await window.api.clearCache()
-      clearAvatarCache()
-      setCacheMessage(t('settings.cacheCleared'))
-    } catch (err) {
-      setCacheMessage(`${t('settings.cacheError')} ${String(err)}`)
-    } finally {
-      setCacheBusy(false)
-    }
-  }
-
-  const fieldStyle = { display: 'flex', flexDirection: 'column' as const, gap: '0.4rem' }
-  const rangeProgressStyle = (value: number, min: number, max: number): CSSProperties =>
-    ({ '--range-progress': `${((value - min) / (max - min)) * 100}%` }) as CSSProperties
-
-  const onShortcutKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
-    if (!recordingShortcut) return
-    event.preventDefault()
-    event.stopPropagation()
-
-    if (event.key === 'Escape') {
-      setRecordingShortcut(false)
-      setShortcutHint('')
-      return
-    }
-    if (event.key === 'Meta' || event.metaKey) {
-      setShortcutHint(t('settings.shortcutSuperReserved'))
-      return
-    }
-
-    const altGraph = event.getModifierState('AltGraph')
-    const modifiers: string[] = []
-    if (!altGraph && event.ctrlKey) modifiers.push('<Control>')
-    if (!altGraph && event.altKey) modifiers.push('<Alt>')
-    if (altGraph) modifiers.push('<Mod5>')
-    if (event.shiftKey) modifiers.push('<Shift>')
-
-    if (['Control', 'Shift', 'Alt', 'AltGraph'].includes(event.key)) {
-      setShortcutHint(
-        `${t('settings.shortcutRecording')} ${modifiers.map(formatAccelerator).join(' + ')}`
-      )
-      return
-    }
-
-    const key = acceleratorKey(event)
-    if (!key) {
-      setShortcutHint(t('settings.shortcutUnsupportedKey'))
-      return
-    }
-    if (modifiers.length === 0) {
-      setShortcutHint(t('settings.shortcutNeedsModifier'))
-      return
-    }
-
-    onChange({ toggleChatShortcut: `${modifiers.join('')}${key}` })
-    setRecordingShortcut(false)
-    setShortcutHint('')
-  }
-
-  return (
-    <section
-      className="settings-panel-scrollbar"
-      onKeyDownCapture={onShortcutKeyDown}
-      style={{
-        width: '350px',
-        maxWidth: '100%',
-        maxHeight: 'calc(100vh - 150px)',
-        overflowY: 'auto',
-        paddingRight: '0.5rem',
-        marginTop: '1.5rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '1.25rem'
-      }}
-    >
-      <h2 style={{ fontSize: '1.2rem', color: '#e0e0e0' }}>{t('settings.title')}</h2>
-      {preferencesError && (
-        <p role="alert" style={{ color: '#fca5a5' }}>
-          {preferencesError}
-        </p>
-      )}
-      {!preferences ? (
-        <p style={{ color: '#adadb8' }}>
-          {preferencesError
-            ? `${t('settings.loadError')} ${preferencesError}`
-            : t('panel.connecting')}
-        </p>
-      ) : (
-        <>
-          <fieldset
-            style={{
-              border: '1px solid #3f3f46',
-              borderRadius: '8px',
-              padding: '1rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.75rem'
-            }}
-          >
-            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
-              {t('settings.chatShortcut')}
-            </legend>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setRecordingShortcut((recording) => !recording)
-                  setShortcutHint('')
-                }}
-                style={{
-                  flex: 1,
-                  padding: '0.65rem',
-                  border: '1px solid #52525b',
-                  borderRadius: '6px',
-                  background: recordingShortcut ? '#5b21b6' : '#3f3f46',
-                  color: '#fff',
-                  cursor: 'pointer'
-                }}
-              >
-                {recordingShortcut
-                  ? t('settings.shortcutRecording')
-                  : preferences.toggleChatShortcut
-                    ? formatShortcut(preferences.toggleChatShortcut)
-                    : t('settings.shortcutNotSet')}
-              </button>
-              {preferences.toggleChatShortcut && (
-                <button
-                  type="button"
-                  onClick={() => onChange({ toggleChatShortcut: '' })}
-                  style={{
-                    padding: '0.65rem',
-                    border: '1px solid #52525b',
-                    borderRadius: '6px',
-                    background: '#3f3f46',
-                    color: '#fff',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {t('settings.shortcutClear')}
-                </button>
-              )}
-            </div>
-            {(recordingShortcut || shortcutHint) && (
-              <p role="status" style={{ color: '#c4b5fd', fontSize: '0.85rem' }}>
-                {shortcutHint || t('settings.shortcutInstruction')}
-              </p>
-            )}
-            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>{t('settings.shortcutWayland')}</p>
-            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
-              {t('settings.shortcutHardwareNote')}
-            </p>
-          </fieldset>
-
-          <fieldset
-            style={{
-              border: '1px solid #3f3f46',
-              borderRadius: '8px',
-              padding: '1rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1rem'
-            }}
-          >
-            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
-              {t('settings.chatSize')}
-            </legend>
-            <label style={fieldStyle}>
-              <span>
-                {t('settings.chatWidth')}: {preferences.chatWidth} px
-              </span>
-              <input
-                type="range"
-                min="280"
-                max="600"
-                step="20"
-                value={preferences.chatWidth}
-                onChange={(event) => onChange({ chatWidth: Number(event.target.value) })}
-                className="settings-range"
-                style={rangeProgressStyle(preferences.chatWidth, 280, 600)}
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span>
-                {t('settings.visibleBeforeScroll')}: {preferences.maxVisibleMessages}
-              </span>
-              <input
-                type="range"
-                min="3"
-                max="20"
-                step="1"
-                value={preferences.maxVisibleMessages}
-                onChange={(event) => onChange({ maxVisibleMessages: Number(event.target.value) })}
-                className="settings-range"
-                style={rangeProgressStyle(preferences.maxVisibleMessages, 3, 20)}
-              />
-            </label>
-          </fieldset>
-
-          <fieldset
-            style={{
-              border: '1px solid #3f3f46',
-              borderRadius: '8px',
-              padding: '1rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1rem'
-            }}
-          >
-            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
-              {t('settings.chatBackground')}
-            </legend>
-            <label style={fieldStyle}>
-              <span>
-                {t('settings.backgroundOpacity')}: {preferences.backgroundOpacity}%
-              </span>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                value={preferences.backgroundOpacity}
-                onChange={(event) => onChange({ backgroundOpacity: Number(event.target.value) })}
-                className="settings-range"
-                style={rangeProgressStyle(preferences.backgroundOpacity, 0, 100)}
-              />
-            </label>
-          </fieldset>
-
-          <fieldset
-            style={{
-              border: '1px solid #3f3f46',
-              borderRadius: '8px',
-              padding: '1rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.75rem'
-            }}
-          >
-            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
-              {t('settings.downloads')}
-            </legend>
-            <label style={fieldStyle}>
-              <span>{t('settings.concurrentDownloads')}</span>
-              <div className="download-stepper">
-                <button
-                  type="button"
-                  aria-label={t('settings.decreaseDownloads')}
-                  onClick={() =>
-                    onChange({
-                      maxConcurrentImageDownloads: Math.max(
-                        1,
-                        preferences.maxConcurrentImageDownloads - 1
-                      )
-                    })
-                  }
-                  disabled={preferences.maxConcurrentImageDownloads <= 1}
-                >
-                  −
-                </button>
-                <input
-                  type="number"
-                  min="1"
-                  max={MAX_CONCURRENT_IMAGE_DOWNLOADS}
-                  step="1"
-                  aria-label={t('settings.concurrentDownloads')}
-                  value={preferences.maxConcurrentImageDownloads}
-                  onChange={(event) => {
-                    const count = event.currentTarget.valueAsNumber
-                    if (
-                      Number.isInteger(count) &&
-                      count >= 1 &&
-                      count <= MAX_CONCURRENT_IMAGE_DOWNLOADS
-                    ) {
-                      onChange({ maxConcurrentImageDownloads: count })
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  aria-label={t('settings.increaseDownloads')}
-                  onClick={() =>
-                    onChange({
-                      maxConcurrentImageDownloads: Math.min(
-                        MAX_CONCURRENT_IMAGE_DOWNLOADS,
-                        preferences.maxConcurrentImageDownloads + 1
-                      )
-                    })
-                  }
-                  disabled={
-                    preferences.maxConcurrentImageDownloads >= MAX_CONCURRENT_IMAGE_DOWNLOADS
-                  }
-                >
-                  +
-                </button>
-              </div>
-            </label>
-            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
-              {t('settings.concurrentDownloadsHelp')}
-            </p>
-            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
-              {t('settings.backendWaylandNote')}
-            </p>
-          </fieldset>
-
-          <fieldset
-            style={{
-              border: '1px solid #3f3f46',
-              borderRadius: '8px',
-              padding: '1rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.75rem'
-            }}
-          >
-            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
-              {t('settings.emoteQuality')}
-            </legend>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.6rem',
-                cursor: 'pointer'
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={preferences.thirdPartyEmotesEnabled}
-                onChange={(event) => onChange({ thirdPartyEmotesEnabled: event.target.checked })}
-                style={{ marginTop: '0.3rem', accentColor: '#9146ff' }}
-              />
-              <span>{t('settings.thirdPartyEmotesEnabled')}</span>
-            </label>
-            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
-              {t('settings.thirdPartyEmotesHelp')}
-            </p>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.6rem',
-                cursor: preferences.thirdPartyEmotesEnabled ? 'pointer' : 'not-allowed',
-                opacity: preferences.thirdPartyEmotesEnabled ? 1 : 0.55
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={preferences.emoteBestQuality}
-                disabled={!preferences.thirdPartyEmotesEnabled}
-                onChange={(event) => onChange({ emoteBestQuality: event.target.checked })}
-                style={{ marginTop: '0.3rem', accentColor: '#9146ff' }}
-              />
-              <span>{t('settings.emoteBestQuality')}</span>
-            </label>
-            <label
-              style={{
-                ...fieldStyle,
-                opacity:
-                  !preferences.thirdPartyEmotesEnabled || preferences.emoteBestQuality ? 0.55 : 1
-              }}
-            >
-              <span>{t('settings.emoteImageScale')}</span>
-              <select
-                value={preferences.emoteImageScale}
-                disabled={!preferences.thirdPartyEmotesEnabled || preferences.emoteBestQuality}
-                onChange={(event) => {
-                  const scale = event.currentTarget.value
-                  if (scale === '1x' || scale === '3x' || scale === '4x') {
-                    onChange({ emoteImageScale: scale })
-                  }
-                }}
-                style={{
-                  padding: '0.55rem',
-                  border: '1px solid #52525b',
-                  borderRadius: '6px',
-                  background: '#27272a',
-                  color: '#fff'
-                }}
-              >
-                <option value="1x">x1</option>
-                <option value="3x">x3</option>
-                <option value="4x">x4</option>
-              </select>
-            </label>
-            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
-              {t('settings.emoteQualityCacheHint')}
-            </p>
-          </fieldset>
-
-          <fieldset
-            style={{
-              border: '1px solid #3f3f46',
-              borderRadius: '8px',
-              padding: '1rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.75rem'
-            }}
-          >
-            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>
-              {t('settings.history')}
-            </legend>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.6rem',
-                cursor: 'pointer'
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={preferences.historyEnabled}
-                onChange={(event) => onChange({ historyEnabled: event.target.checked })}
-                style={{ marginTop: '0.3rem', accentColor: '#9146ff' }}
-              />
-              <span>{t('settings.historyEnabled')}</span>
-            </label>
-            <label style={{ ...fieldStyle, opacity: preferences.historyEnabled ? 1 : 0.55 }}>
-              <span>
-                {t('settings.historyLimit')}: {preferences.historyLimit}
-              </span>
-              <input
-                type="range"
-                min="5"
-                max="100"
-                step="5"
-                value={preferences.historyLimit}
-                disabled={!preferences.historyEnabled}
-                onChange={(event) => onChange({ historyLimit: Number(event.target.value) })}
-                className="settings-range"
-                style={rangeProgressStyle(preferences.historyLimit, 5, 100)}
-              />
-            </label>
-            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>{t('settings.historyRisk')}</p>
-          </fieldset>
-
-          <fieldset
-            style={{
-              border: '1px solid #3f3f46',
-              borderRadius: '8px',
-              padding: '1rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.75rem'
-            }}
-          >
-            <legend style={{ padding: '0 0.4rem', color: '#bf94ff' }}>{t('settings.cache')}</legend>
-            <button
-              type="button"
-              onClick={clearCache}
-              disabled={connected || cacheBusy}
-              style={{
-                padding: '0.65rem',
-                border: '1px solid #52525b',
-                borderRadius: '6px',
-                background: connected || cacheBusy ? '#27272a' : '#3f3f46',
-                color: '#fff',
-                cursor: connected || cacheBusy ? 'not-allowed' : 'pointer'
-              }}
-            >
-              {cacheBusy ? t('panel.connecting') : t('settings.clearCache')}
-            </button>
-            <p style={{ color: '#a1a1aa', fontSize: '0.85rem' }}>
-              {connected ? t('settings.cacheStreaming') : t('settings.cacheRecommendation')}
-            </p>
-            {cacheMessage && (
-              <p
-                role="status"
-                style={{
-                  color: cacheMessage.startsWith(t('settings.cacheError')) ? '#fca5a5' : '#86efac'
-                }}
-              >
-                {cacheMessage}
-              </p>
-            )}
-          </fieldset>
-        </>
-      )}
-    </section>
-  )
 }
 
 function App(): ReactElement {
@@ -669,15 +75,78 @@ function App(): ReactElement {
   const [showSettings, setShowSettings] = useState(false)
   const [preferences, setPreferences] = useState<Preferences | null>(null)
   const [preferencesError, setPreferencesError] = useState<string | null>(null)
+  const [authStatus, setAuthStatus] = useState<TwitchAuthStatus>({
+    authenticated: false,
+    canSendChat: false,
+    username: null,
+    avatarUrl: null,
+    deviceAuthorization: null,
+    error: null
+  })
+  const [authStatusLoaded, setAuthStatusLoaded] = useState(false)
+  const [authBusy, setAuthBusy] = useState(false)
+  const [signInNotice, setSignInNotice] = useState('')
 
   const prevNonceRef = useRef(0)
+  const authStatusRef = useRef(false)
+  const authStatusRevisionRef = useRef(0)
+  const disconnectRequestedRef = useRef(false)
+  const signInNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const updateAuthStatus = useCallback((nextStatus: TwitchAuthStatus): void => {
+    authStatusRef.current = nextStatus.authenticated
+    setAuthStatus(nextStatus)
+    setAuthStatusLoaded(true)
+  }, [])
+
+  const showSignInCancelledNotice = (): void => {
+    if (signInNoticeTimeoutRef.current) clearTimeout(signInNoticeTimeoutRef.current)
+    setSignInNotice(t('settings.signInCancelled'))
+    signInNoticeTimeoutRef.current = setTimeout(() => {
+      setSignInNotice('')
+      signInNoticeTimeoutRef.current = null
+    }, 2000)
+  }
 
   useEffect(() => {
     window.api
       .getPreferences()
       .then(setPreferences)
       .catch((err: unknown) => setPreferencesError(String(err)))
-  }, [])
+    const offAuthStatus = window.api.onTwitchAuthStatus((nextStatus) => {
+      authStatusRevisionRef.current += 1
+      if (authStatusRef.current && !nextStatus.authenticated) {
+        setPreferences((current) =>
+          current ? { ...current, interactiveChatEnabled: false } : current
+        )
+      }
+      updateAuthStatus(nextStatus)
+    })
+    window.api
+      .getTwitchAuthStatus()
+      .then((nextStatus) => {
+        if (authStatusRevisionRef.current !== 0) return
+        updateAuthStatus(nextStatus)
+      })
+      .catch((err: unknown) =>
+        updateAuthStatus({
+          authenticated: false,
+          canSendChat: false,
+          username: null,
+          avatarUrl: null,
+          deviceAuthorization: null,
+          error: String(err)
+        })
+      )
+    return offAuthStatus
+  }, [updateAuthStatus])
+
+  useEffect(
+    () => () => {
+      if (signInNoticeTimeoutRef.current) clearTimeout(signInNoticeTimeoutRef.current)
+    },
+    []
+  )
 
   useEffect(() => {
     if (!preferences) return
@@ -774,14 +243,92 @@ function App(): ReactElement {
     const cleanChannel = channel.trim().toLowerCase()
     if (!cleanChannel) return
 
+    disconnectRequestedRef.current = false
     setErrorMsg(null)
     setStatus('connecting')
     window.api.setChannel(cleanChannel)
   }
 
+  const handleTwitchLogin = async (
+    enableInteractiveChatAfterLogin = false
+  ): Promise<TwitchAuthStatus | null> => {
+    setAuthBusy(true)
+    try {
+      if (signInNoticeTimeoutRef.current) clearTimeout(signInNoticeTimeoutRef.current)
+      signInNoticeTimeoutRef.current = null
+      setSignInNotice('')
+      const nextStatus = await window.api.loginToTwitch()
+      updateAuthStatus(nextStatus)
+      if (enableInteractiveChatAfterLogin && nextStatus.canSendChat) {
+        setPreferences((current) =>
+          current ? { ...current, interactiveChatEnabled: true } : current
+        )
+      }
+      return nextStatus
+    } catch (err) {
+      if (/cancelled/i.test(String(err))) {
+        showSignInCancelledNotice()
+      } else {
+        updateAuthStatus({
+          authenticated: false,
+          canSendChat: false,
+          username: null,
+          avatarUrl: null,
+          deviceAuthorization: null,
+          error: String(err)
+        })
+      }
+      return null
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const handleTwitchLogout = async (): Promise<void> => {
+    setAuthBusy(true)
+    try {
+      updateAuthStatus(await window.api.logoutFromTwitch())
+      setPreferences((current) =>
+        current ? { ...current, interactiveChatEnabled: false } : current
+      )
+      setStatus('idle')
+    } catch (err) {
+      updateAuthStatus({
+        authenticated: false,
+        canSendChat: false,
+        username: null,
+        avatarUrl: null,
+        deviceAuthorization: null,
+        error: String(err)
+      })
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const handleTwitchLoginCancel = async (): Promise<void> => {
+    try {
+      await window.api.cancelTwitchLogin()
+      showSignInCancelledNotice()
+    } catch (err) {
+      setAuthStatus((current) => ({
+        ...current,
+        error: String(err)
+      }))
+    }
+  }
+
+  const enableInteractiveChat = async (): Promise<void> => {
+    if (authStatus.canSendChat) {
+      setPreferences((current) =>
+        current ? { ...current, interactiveChatEnabled: true } : current
+      )
+    }
+  }
+
   const isConnected = status === 'connected' || status === 'connecting'
-  const btnColor = isConnected ? '#ef4444' : '#9146FF'
-  const btnHoverColor = isConnected ? '#dc2626' : '#772ce8'
+  const btnColor = isConnected ? '#ff9f1c' : '#9146FF'
+  const btnHoverColor = isConnected ? '#e88900' : '#772ce8'
 
   const initial = channel.trim() ? channel.trim()[0].toUpperCase() : '?'
   const inputDisabled = status !== 'idle' && status !== 'error'
@@ -852,11 +399,63 @@ function App(): ReactElement {
       </div>
       <p style={{ color: '#adadb8', marginTop: 0 }}>{t('panel.subtitle')}</p>
 
+      {!showSettings && authStatusLoaded && !authStatus.authenticated && (
+        <div
+          role="status"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '0.5rem 1rem',
+            padding: '0.65rem 0.75rem',
+            borderLeft: '3px solid #ff9f1c',
+            borderRadius: '4px',
+            background: '#26262c',
+            color: '#ffb454',
+            fontSize: '0.9rem',
+            width: '100%',
+            maxWidth: '720px',
+            marginTop: '0.75rem'
+          }}
+        >
+          <span style={{ flex: '1 1 240px' }}>{t('panel.signInUnlockFeatures')}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setShowSettings(true)
+              void handleTwitchLogin()
+            }}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: '#ffb454',
+              cursor: 'pointer',
+              font: 'inherit',
+              fontWeight: 600,
+              textDecoration: 'underline',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {t('settings.signIn')}
+          </button>
+        </div>
+      )}
+
       {showSettings ? (
         <SettingsPanel
           preferences={preferences}
           preferencesError={preferencesError}
           connected={isConnected}
+          authStatus={authStatus}
+          authBusy={authBusy}
+          signInNotice={signInNotice}
+          onLogin={(enableInteractiveChatAfterLogin) =>
+            void handleTwitchLogin(enableInteractiveChatAfterLogin)
+          }
+          onCancelLogin={() => void handleTwitchLoginCancel()}
+          onLogout={() => void handleTwitchLogout()}
+          onEnableInteractiveChat={() => void enableInteractiveChat()}
           onChange={(update) =>
             setPreferences((current) => (current ? { ...current, ...update } : current))
           }
