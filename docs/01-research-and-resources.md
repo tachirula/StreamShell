@@ -17,10 +17,20 @@ by StreamShell. For an overview of how these pieces fit together, see the
     profile image.
   - `GET /helix/chat/badges/global` loads global badge definitions.
   - `GET /helix/chat/badges?broadcaster_id=...` loads channel badge overrides.
+- [OAuth token validation](https://dev.twitch.tv/docs/authentication/validate-tokens/)
+  is performed at startup and periodically while the app is running. Desktop
+  sign-in uses Twitch's Device Code Flow in the system browser; no localhost
+  callback, redirect URI, or client secret is required.
 - [Client credentials grant](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#client-credentials-grant-flow)
-  is the server-to-server token flow. StreamShell uses an app token, not a
-  viewer login or user OAuth grant. Client credentials belong in the local,
-  ignored `electron-app/.env` file; never commit them.
+  is an optional fallback for Helix requests when no Twitch user session is
+  available. Public user and badge lookups use the signed-in User Access Token.
+  A client secret is not required for Device Code Flow and must never ship in
+  the public Electron app.
+- One Device Code authorization requests `chat:read` and `chat:edit`, avoiding
+  a second authorization when the user enables message sending later. The
+  interactive-chat feature remains opt-in even though its scope is granted.
+  Tokens are stored with Electron `safeStorage`. Existing sessions with only
+  `chat:read` need one authorization to add `chat:edit`.
 
 ### IRC emote ranges
 

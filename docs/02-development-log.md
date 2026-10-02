@@ -22,12 +22,59 @@ for setup and operation.
   channel `JOIN`, not merely after opening the WebSocket. Join timeout, Twitch
   notices, and connection/disconnection events are surfaced to the panel.
 
+## Twitch account and optional capabilities
+
+- Twitch sign-in uses the official Device Code Flow. Sign-in is optional and is
+  initiated from Settings or the orange prompt below **Connect to Chat**. The
+  app displays a user code and clickable activation URL without opening a
+  browser automatically.
+- A normal sign-in requests both `chat:read` and `chat:edit` in one device
+  authorization. This avoids a second authorization when the user later enables
+  interactive chat. Granting the scopes does not turn interactive chat on;
+  that feature remains opt-in in Settings. Existing sessions created before
+  the combined-scope flow may require a one-time authorization to add
+  `chat:edit`; Settings identifies it as a permission grant.
+- Access and rotating refresh tokens are stored encrypted using Electron
+  `safeStorage`, validated with Twitch, and excluded from preferences. Logout
+  revokes available tokens and clears the account session.
+- The home view shows an optional sign-in notice only after auth status has
+  loaded and confirms that no account is authenticated. Public-facing errors
+  and permission notices use an orange accent rather than red.
+- The renderer's channel avatar lookup is asynchronous, debounced while typing,
+  and protected against stale responses. Cached avatars can appear immediately.
+  Helix user/profile and badge calls prefer the signed-in User Access Token;
+  without a session they require configured App Access Token credentials.
+  Without either usable token, avatar/profile and badge lookups can be
+  unavailable while anonymous chat and third-party emotes continue to work.
+
+## Overlay interaction and chat reading
+
+- The overlay is click-through by default. **Disable click-through** gates
+  username profile buttons, chat input, and scroll controls; the dependent
+  profile/chat features are disabled when the gate is off.
+- Chat height is stable, based on the configured number of visible messages
+  and available monitor space. New arrivals do not resize the overlay or move
+  the message composer; overflow is handled inside the scroll view.
+- The overlay follows the newest messages until the user scrolls to older
+  messages. At that point new arrivals do not steal the reading position and a
+  **Jump to latest** control appears. Selecting it cancels pending scroll
+  restoration and returns to the newest message.
+- Opening a username profile shows public profile data and the bounded
+  in-session message history. New messages from that user update the open
+  profile live. Sequence numbers prevent overlap between the initial profile
+  response and messages received while it loads. Twitch does not expose public
+  historical chat logs.
+- Profile details appear beside the chat. Profile message history, current
+  channel history, badge catalogs, and third-party emote catalogs are held in
+  memory and are not persistent transcripts.
+
 ## Chat message pipeline
 
 1. `tmi.js` receives a message and its IRC tags.
 2. Main resolves the author, display color, reply metadata, Twitch badges, and
    emote segments. A promise chain preserves arrival order despite asynchronous
-   catalog and image work.
+   catalog and image work. Asset resolution is bounded by 2.5 seconds per
+   message; if it exceeds the deadline, the message is delivered as text.
 3. Twitch emotes are located by IRC character ranges. Third-party emotes are
    recognized in a second, whole-word pass against the active channel catalog.
 4. The resolved badge and segment data is JSON-encoded in the string payload of
@@ -46,6 +93,10 @@ the compositor process.
 
 - Twitch Helix supplies global and broadcaster-specific badge catalogs; the
   broadcaster's definitions take precedence where a badge set overlaps.
+- The channel broadcaster ID is taken from tmi.js's `room-id` message tag, so
+  channel badge and third-party emote lookups do not require an authenticated
+  account merely to discover the ID. Failed Helix badge catalogs have a
+  45-second retry cooldown rather than being requested on every message.
 - BTTV, FFZ, and 7TV catalogs are loaded for the active channel after JOIN.
   The setting **Support BTTV, FFZ and 7TV APIs** is on by default; when off,
   those plain-text codes are not replaced by images.
@@ -106,7 +157,9 @@ the compositor process.
   mode takes precedence over the explicit scale.
 - Image-download concurrency defaults to four and accepts one to sixteen.
 - Overlay-specific settings are sent to GNOME in `OverlaySettingsChanged`.
-  GNOME stores and observes extension settings through GSettings.
+  GNOME stores and observes extension settings through GSettings. On startup,
+  the extension also calls `GetOverlaySettings` so it receives the current
+  values even if the backend started first.
 - A configurable global keybinding toggles overlay visibility. Super/Windows
   is reserved by GNOME and cannot be recorded. Fn may be handled by keyboard
   firmware and therefore may not produce a recordable event.
@@ -126,3 +179,8 @@ the compositor process.
 - Chat history, badge indexes, and third-party catalogs are in-memory state.
   Preferences, image cache files, and the renderer's avatar cache have separate
   persistence lifetimes.
+- Electron enforces a single application instance, and its D-Bus service does
+  not queue behind another owner. Main-process IPC inputs such as channel names
+  and external navigation URLs are validated. The GNOME chat-send method
+  accepts calls only from the local GNOME Shell process and validates message
+  content, enabled settings, Twitch scopes, IRC identity, and channel state.

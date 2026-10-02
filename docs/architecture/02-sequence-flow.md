@@ -76,7 +76,82 @@ sequenceDiagram
 
 Not every app preference belongs to GNOME. For example, download concurrency
 and third-party catalog support are backend settings; overlay appearance,
-animation, history, and the global shortcut are consumed by the extension.
+interactive chat, clickable profiles, animation, history, and the global
+shortcut are consumed by the extension.
 Refer to [deployment and use cases](./05-deployment-and-use-cases.md) for the
 process boundary and [runtime states](./04-runtime-pipelines-and-states.md)
 for lifecycle constraints.
+
+## Twitch account sign-in
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Main as Electron main
+    participant Auth as Twitch OAuth
+    participant Browser as System browser
+    participant UI as React panel
+    participant Store as Electron safeStorage
+
+    Main->>Store: Load encrypted token if present
+    opt Saved token exists
+        Main->>Auth: Validate saved token
+    end
+    Main-->>UI: Publish optional account status
+    Note over User,UI: Channel chat remains available anonymously
+    opt User chooses to sign in from Settings
+        Main->>Auth: Request device code and scopes
+        Auth-->>Main: Return user code, verification URI, interval, expiry
+        Main-->>UI: Publish code and clickable activation link
+        User->>Browser: Open twitch.tv/activate and enter code
+        Browser->>Auth: Authorize requested scopes
+        loop Respect Twitch polling interval
+            Main->>Auth: Poll device-code token endpoint
+            Auth-->>Main: authorization_pending or tokens
+        end
+        Main->>Auth: Validate access token
+        Auth-->>Main: Account identity and expiry
+        Main->>Store: Encrypt and persist token
+        Main-->>UI: Publish username/authentication status (never token)
+    end
+```
+
+The device flow does not open the browser automatically or use a redirect
+listener. Access tokens are refreshed with Twitch's rotating, one-time-use
+refresh tokens; each replacement is persisted before continuing. The Client
+Secret is not part of the public desktop login flow.
+
+## Optional overlay interactions
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Ext as GNOME overlay
+    participant Bus as Session D-Bus
+    participant Main as Electron main
+    participant IRC as Authenticated Twitch IRC
+    participant Helix as Twitch Helix
+    participant Cache as Local image cache
+
+    opt Interactive chat is enabled
+        User->>Ext: Enter message and press Enter
+        Ext->>Bus: SendChatMessage(text)
+        Bus->>Main: Validate setting, account, channel, and text
+        Main->>IRC: Send message
+        IRC-->>Main: Message echo
+        Main-->>Ext: Publish normal chat message
+    end
+    opt Clickable profiles are enabled
+        User->>Ext: Click username
+        Ext->>Bus: GetUserProfile(login)
+        Bus->>Main: Resolve profile and filter retained session log
+        Main->>Helix: Look up public profile
+        Helix-->>Main: Display name, avatar URL, description
+        Main->>Cache: Cache avatar locally
+        Main-->>Ext: Profile details, local image path, bounded messages
+    end
+```
+
+Both interaction settings are off by default. Profile messages use the
+existing capped in-memory channel history and are searched on click; there is
+no per-user index or public historical chat log.

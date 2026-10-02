@@ -79,11 +79,14 @@ flowchart LR
   Shell["GNOME Shell"]
 
   subgraph System["StreamShell"]
+    SignIn(["Sign in to Twitch"])
     Connect(["Connect to channel"])
     Catalogs(["Load channel badge and<br/>emote catalogs"])
     ViewChat(["View live chat overlay"])
     RichChat(["View badges, replies,<br/>and emotes"])
     History(["Browse recent session<br/>messages"])
+    SendChat(["Optionally send<br/>chat messages"])
+    UserProfile(["Optionally inspect<br/>clickable user profiles"])
     Toggle(["Toggle overlay visibility"])
     Assets(["Configure emote quality<br/>and download concurrency"])
     ThirdParty(["Enable or disable<br/>third-party emote APIs"])
@@ -92,9 +95,12 @@ flowchart LR
     ClearCache(["Clear image cache<br/>(while disconnected)"])
   end
 
+  User --- SignIn
   User --- Connect
   User --- ViewChat
   User --- History
+  User --- SendChat
+  User --- UserProfile
   User --- Toggle
   User --- Assets
   User --- ThirdParty
@@ -102,8 +108,11 @@ flowchart LR
   User --- Shortcut
   User --- ClearCache
   Twitch --- Connect
+  Twitch --- SignIn
   Twitch --- Catalogs
   Twitch --- ViewChat
+  Twitch --- SendChat
+  Twitch --- UserProfile
   EmoteAPIs --- Catalogs
   Shell --- ViewChat
   Shell --- Toggle

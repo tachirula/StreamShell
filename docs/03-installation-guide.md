@@ -17,15 +17,13 @@ See the [architecture diagrams](./README.md) for process and message flows.
 ## Configure Twitch API credentials
 
 1. Create an application in the [Twitch Developer Console](https://dev.twitch.tv/console/apps).
-2. Use a valid HTTPS OAuth redirect URL (StreamShell uses the app client
-   credentials flow, not a browser redirect), select the application
-   integration category, and choose a confidential client.
-3. Copy its Client ID and generate a Client Secret.
+2. Select the application integration category. Device Code Flow does not use
+   an OAuth redirect URL.
+3. Copy its Client ID. Device Code Flow does not need a Client Secret.
 4. Create `electron-app/.env`:
 
    ```dotenv
    TWITCH_API_ID_CLIENT=<your client id>
-   TWITCH_API_SECRET_CLIENT=<your client secret>
    ```
 
 Keep the file local. It is ignored by Git and must never be committed. It
@@ -33,11 +31,44 @@ belongs beside `electron-app/package.json`. The startup log reports the number
 of variables loaded; a count of zero usually means the file is missing,
 misnamed, empty, or in the wrong directory.
 
-Twitch chat itself is read over IRC and does not require a user login. Missing
-Helix credentials may prevent identity, badge, or catalog preparation, but
-should not be mistaken for a Twitch account sign-in prompt.
+The app embeds the Client ID into the Electron main bundle at build time; it is
+public application metadata, not a secret. StreamShell offers optional Twitch
+sign-in below **Connect to Chat** and in Settings. Reading channel chat does
+not require signing in; Twitch uses an anonymous IRC identity until the user
+connects an account. StreamShell
+then displays a single-use device code and a clickable `twitch.tv/activate`
+link; it does not open the browser automatically. The user completes
+authorization in their regular browser, and StreamShell polls Twitch for the
+result. Access and
+rotating refresh tokens are encrypted with Electron `safeStorage`, validated
+with Twitch, and not written to `preferences.json`. One authorization requests
+both `chat:read` and `chat:edit` so enabling message sending later does not
+require another sign-in. Interactive chat itself remains off until enabled in
+Settings. Existing sessions issued with only `chat:read` require a one-time
+authorization to add `chat:edit`.
+
+Helix public user and badge requests use the authenticated User Access Token.
+An optional `TWITCH_API_SECRET_CLIENT` enables an App Access Token fallback
+when there is no user session; it is not needed for normal signed-in use and
+must never be bundled in a public release.
+
+The home screen displays an orange optional sign-in notice only after the
+account status has loaded and confirmed the account is signed out. Signing in
+grants the scopes needed by account-backed features and chat sending. If an
+older account session lacks `chat:edit`, Settings offers a permission-grant
+flow instead of incorrectly describing the account as signed out. A
+signed-out user can still read public channel chat anonymously. Without an
+authenticated user token or the optional app-token fallback, Helix-backed
+streamer avatars, profile details, and badges may be unavailable; third-party
+emotes use independent provider APIs.
 
 ## Install and start
+
+On Linux, the development command runs Electron Vite with its `--noSandbox`
+option to work around Chromium startup failures observed in some local
+environments. This applies only to `npm run dev`; packaged builds do not use
+that development option. The app does not change `/dev/shm` or `/tmp`
+permissions.
 
 ```bash
 cd electron-app
@@ -101,9 +132,24 @@ The control panel provides persistent preferences for:
 - **Animated emotes:** can be switched off through the extension setting.
 - **Overlay appearance and history:** adjust the chat width, background opacity
   (0–100%), visible messages, and session history in Settings. Appearance
-  changes are applied live to the GNOME overlay. In a sufficiently large app
+  changes are applied live to the GNOME overlay. Chat viewport height is fixed
+  by the configured visible-message count and available monitor space, so
+  incoming messages do not resize the overlay or move the composer. The overlay
+  follows new messages unless the user scrolls into older history; while
+  browsing, new messages preserve the reading position and **Jump to latest**
+  returns to the newest message. In a sufficiently large app
   window, Settings align to the left and reflow into columns to use the
   available space; the compact layout remains centered in smaller windows.
+- **Interactive chat:** disabled by default. Sign in and enable it to show an
+  input field in the GNOME overlay; Enter sends a message to the active Twitch
+  channel.
+- **Clickable profiles:** disabled by default. When enabled, clicking a
+  username opens its public profile details and matching messages from the
+  current in-memory channel session. New messages from that user appear in the
+  open profile in real time. The profile message limit is configurable up to
+  500. Twitch does not provide a public historical chat-log endpoint; no
+  per-user message index is stored, and the existing bounded session log is
+  searched only when a profile is opened.
 - **Global show/hide shortcut:** record a modifier and key combination. The
   same shortcut toggles visibility. Super/Windows is reserved by GNOME; Fn is
   often handled by keyboard firmware and may not be detectable. Desktop-level
