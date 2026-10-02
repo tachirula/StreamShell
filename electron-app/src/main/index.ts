@@ -1,90 +1,276 @@
 import './load-env'
 
-import { getStreamerAvatar, getUserInfo } from './twitch-api'
+import {
+  getAuthenticatedTwitchUserAvatar,
+  getStreamerAvatar,
+  setTwitchUserAccessTokenProvider,
+  getTwitchUserProfile
+} from './twitch-api'
 import { preloadBadges, resolveBadges } from './twitch-badges'
 import { buildSegments, stripReplyMention, type ChatReply, type Segment } from './chat-segments'
-import { clearImageCache, setMaxConcurrentImageDownloads } from './emote-cache'
+import { cacheImage, clearImageCache, setMaxConcurrentImageDownloads } from './emote-cache'
 import { clearThirdPartyEmotes, loadThirdPartyEmotes } from './third-party-emotes'
 import {
   DEFAULT_PREFERENCES,
   loadPreferences,
   savePreferences,
-  validatePreferences,
-  type AppPreferences
+  validatePreferences
 } from './preferences'
+import {
+  clearStoredTwitchSession,
+  loadStoredTwitchSession,
+  pollTwitchDeviceAuthorization,
+  refreshTwitchSession,
+  requestTwitchDeviceAuthorization,
+  revokeTwitchAccessToken,
+  saveTwitchSession,
+  TwitchAuthError,
+  validateTwitchAccessToken,
+  type TwitchDeviceAuthorization,
+  type TwitchAuthSession
+} from './twitch-auth'
 
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
-import { join } from 'path'
+import { basename, join } from 'path'
+import { readFile, readlink } from 'fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import type { Message, MessageBus } from 'dbus-next'
 import {
   checkGnomeSetup,
   ensureGnomeExtensionEnabled,
   resolveRepoExtensionPath,
   type GnomeCheckResult
 } from './gnome-setup'
-
-const tmi = require('tmi.js')
-const dbus = require('dbus-next')
-
-if (process.platform === 'linux') {
-  app.commandLine.appendSwitch('no-sandbox')
-}
+import tmi from 'tmi.js'
+import * as dbus from 'dbus-next'
+import type { AppPreferences, TwitchAuthStatus, TwitchChatClient } from '../shared/types'
 
 class StreamShellInterface extends dbus.interface.Interface {
   constructor(name: string) {
     super(name)
   }
-  MessageReceived(user: string, color: string, text: string) {
+
+  MessageReceived(user: string, color: string, text: string): [string, string, string] {
     return [user, color, text]
   }
-  HistoryMessageReceived(user: string, color: string, text: string) {
+  HistoryMessageReceived(user: string, color: string, text: string): [string, string, string] {
     return [user, color, text]
   }
-  ChatCleared() {
+  ChatCleared(): [] {
     return []
   }
-  OverlaySettingsChanged(settings: string) {
+  OverlaySettingsChanged(settings: string): string {
     return settings
   }
+  GetOverlaySettings(): string {
+    return overlaySettingsJson()
+  }
+  GetUserProfile(login: string): Promise<string> {
+    return loadUserProfile(login)
+  }
+}
+
+function isValidRequestId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9-]{1,64}$/i.test(value)
+}
+
+async function isGnomeShellSender(bus: MessageBus, sender: string): Promise<boolean> {
+  if (process.platform !== 'linux' || !sender.startsWith(':')) return false
+  const response = await bus.call(
+    new dbus.Message({
+      destination: 'org.freedesktop.DBus',
+      path: '/org/freedesktop/DBus',
+      interface: 'org.freedesktop.DBus',
+      member: 'GetConnectionUnixProcessID',
+      signature: 's',
+      body: [sender]
+    })
+  )
+  const pid = response?.body[0]
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return false
+  try {
+    const [executable, status] = await Promise.all([
+      readlink(`/proc/${pid}/exe`),
+      readFile(`/proc/${pid}/status`, 'utf8')
+    ])
+    const uid = status.match(/^Uid:\s+(\d+)/m)?.[1]
+    return basename(executable) === 'gnome-shell' && uid === String(process.getuid?.())
+  } catch (error) {
+    console.warn('[StreamShell Backend] Could not verify D-Bus caller process:', error)
+    return false
+  }
+}
+
+function installChatMethodHandler(bus: MessageBus): void {
+  bus.addMethodHandler((message: Message): boolean => {
+    if (
+      message.path !== '/org/streamshell/Twitch/Chat' ||
+      message.interface !== 'org.streamshell.Twitch.Chat' ||
+      message.member !== 'SendChatMessage'
+    ) {
+      return false
+    }
+
+    void (async () => {
+      try {
+        if (message.signature !== 'ss' || message.body.length !== 2) {
+          throw new dbus.DBusError(
+            'org.streamshell.Twitch.Error.InvalidArguments',
+            'SendChatMessage expects a request ID and message text.'
+          )
+        }
+        if (!(await isGnomeShellSender(bus, message.sender))) {
+          console.warn(
+            `[StreamShell Backend] Rejected SendChatMessage from untrusted D-Bus sender ${message.sender}.`
+          )
+          throw new dbus.DBusError(
+            'org.streamshell.Twitch.Error.Unauthorized',
+            'Only the GNOME Shell overlay can send chat messages.'
+          )
+        }
+        const [requestId, text] = message.body
+        if (!isValidRequestId(requestId) || typeof text !== 'string') {
+          throw new dbus.DBusError(
+            'org.streamshell.Twitch.Error.InvalidArguments',
+            'SendChatMessage received invalid arguments.'
+          )
+        }
+        const result = await sendTwitchChatMessage(requestId, text)
+        bus.send(dbus.Message.newMethodReturn(message, 's', [result]))
+      } catch (error) {
+        if (error instanceof dbus.DBusError) {
+          sendDbusError(bus, message, error.type, error.text)
+          return
+        }
+        console.error('[StreamShell Backend] SendChatMessage D-Bus handler failed:', error)
+        sendDbusError(
+          bus,
+          message,
+          'org.streamshell.Twitch.Error.Internal',
+          'The backend could not process the chat message.'
+        )
+      }
+    })()
+    return true
+  })
+}
+
+function sendDbusError(
+  bus: MessageBus,
+  request: Message,
+  errorName: string,
+  errorText: string
+): void {
+  bus.send(
+    new dbus.Message({
+      type: dbus.MessageType.ERROR,
+      errorName,
+      replySerial: String(request.serial ?? ''),
+      destination: request.sender,
+      signature: 's',
+      body: [errorText]
+    })
+  )
+}
+
+function overlaySettingsJson(): string {
+  return JSON.stringify({
+    chatWidth: preferences.chatWidth,
+    backgroundOpacity: preferences.backgroundOpacity,
+    maxVisibleMessages: preferences.maxVisibleMessages,
+    historyEnabled: preferences.historyEnabled,
+    historyLimit: preferences.historyLimit,
+    disableClickThrough: preferences.disableClickThrough,
+    interactiveChatEnabled: preferences.interactiveChatEnabled,
+    clickableProfilesEnabled: preferences.clickableProfilesEnabled,
+    profileMessageLimit: preferences.profileMessageLimit,
+    toggleChatShortcut: preferences.toggleChatShortcut,
+    animatedEmotesEnabled: preferences.animatedEmotesEnabled
+  })
 }
 
 StreamShellInterface.configureMembers({
   signals: {
-    MessageReceived: { signature: 'sss', names: ['user', 'color', 'text'] },
-    HistoryMessageReceived: { signature: 'sss', names: ['user', 'color', 'text'] },
-    ChatCleared: { signature: '', names: [] },
-    OverlaySettingsChanged: { signature: 's', names: ['settings'] }
+    MessageReceived: { signature: 'sss' },
+    HistoryMessageReceived: { signature: 'sss' },
+    ChatCleared: { signature: '' },
+    OverlaySettingsChanged: { signature: 's' }
+  },
+  methods: {
+    GetOverlaySettings: { inSignature: '', outSignature: 's' },
+    GetUserProfile: { inSignature: 's', outSignature: 's' }
   }
 })
 
-let chatInterface: any = null
-let twitchClient: any = null
+let chatInterface: StreamShellInterface | null = null
+let twitchClient: TwitchChatClient | null = null
 let mainWindow: BrowserWindow | null = null
 let joinTimeout: NodeJS.Timeout | null = null
 let broadcasterId: string | null = null
+let thirdPartyBroadcasterId: string | null = null
+let joinedChannel: string | null = null
+let firstChatMessageLogged = false
 let messageChain: Promise<void> = Promise.resolve()
+const pendingChatEchoes = new Map<string, { requestId: string; timeout: NodeJS.Timeout }[]>()
 let thirdPartyEmotesReady: Promise<void> = Promise.resolve()
+const MESSAGE_ASSET_TIMEOUT_MS = 2500
 let pendingGnomeStatus: GnomeCheckResult | null = null
-let preferences: AppPreferences = DEFAULT_PREFERENCES
+let preferences: AppPreferences = { ...DEFAULT_PREFERENCES }
 let activeChannel: string | null = null
+let authSession: TwitchAuthSession | null = null
+let authError: string | null = null
+let authAvatarUrl: string | null = null
+let authPromise: Promise<TwitchAuthSession> | null = null
+let authValidationTimer: NodeJS.Timeout | null = null
+let authAbortController: AbortController | null = null
+let authDeviceAuthorization: TwitchDeviceAuthorization | null = null
 let preferenceRevision = 0
 const chatHistory: {
   user: string
+  login: string
+  userId: string
   color: string
   text: string
+  sequence: number
   badges: string[]
   emotes: Record<string, string[]> | null
   reply: ChatReply | null
 }[] = []
+let chatMessageSequence = 0
 const MAX_STORED_HISTORY = 500
 
 const REPO_EXTENSION_PATH = resolveRepoExtensionPath()
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
-async function initDBus() {
+setTwitchUserAccessTokenProvider(() => authSession?.accessToken ?? null)
+
+if (!hasSingleInstanceLock) {
+  console.warn('[StreamShell Backend] Another StreamShell instance is already running.')
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      createWindow()
+      return
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  })
+}
+
+async function initDBus(): Promise<void> {
   try {
     const bus = dbus.sessionBus()
-    await bus.requestName('org.streamshell.Twitch')
+    const result = await bus.requestName('org.streamshell.Twitch', dbus.NameFlag.DO_NOT_QUEUE)
+    if (
+      result !== dbus.RequestNameReply.PRIMARY_OWNER &&
+      result !== dbus.RequestNameReply.ALREADY_OWNER
+    ) {
+      throw new Error(`Could not acquire D-Bus service name (request result ${result}).`)
+    }
+    installChatMethodHandler(bus)
     chatInterface = new StreamShellInterface('org.streamshell.Twitch.Chat')
     bus.export('/org/streamshell/Twitch/Chat', chatInterface)
   } catch (err) {
@@ -96,6 +282,223 @@ function sendToRenderer(channel: string, payload?: unknown): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
   }
+}
+
+function twitchAuthStatus(): TwitchAuthStatus {
+  return {
+    authenticated: authSession !== null,
+    canSendChat: authSession?.scopes.includes('chat:edit') ?? false,
+    username: authSession?.login ?? null,
+    avatarUrl: authAvatarUrl,
+    deviceAuthorization: authDeviceAuthorization,
+    error: authError
+  }
+}
+
+function loadSignedInAvatar(session: TwitchAuthSession): void {
+  authAvatarUrl = null
+  void getAuthenticatedTwitchUserAvatar(session.accessToken).then((avatarUrl) => {
+    if (authSession?.accessToken !== session.accessToken) return
+    authAvatarUrl = avatarUrl
+    publishTwitchAuthStatus()
+  })
+}
+
+function publishTwitchAuthStatus(): TwitchAuthStatus {
+  const status = twitchAuthStatus()
+  sendToRenderer('twitch:auth-status', status)
+  return status
+}
+
+function scheduleTwitchTokenValidation(): void {
+  if (authValidationTimer) clearTimeout(authValidationTimer)
+  if (!authSession) return
+  const refreshIn = authSession.expiresAt - Date.now() - 5 * 60 * 1000
+  authValidationTimer = setTimeout(
+    () => {
+      authValidationTimer = null
+      void validateActiveTwitchSession()
+    },
+    Math.max(60 * 1000, Math.min(60 * 60 * 1000, refreshIn))
+  )
+}
+
+async function validateActiveTwitchSession(): Promise<void> {
+  if (!authSession) return
+  try {
+    let current = authSession
+    if (current.expiresAt <= Date.now() + 5 * 60 * 1000 && current.refreshToken) {
+      const refreshed = await refreshTwitchSession(current)
+      await saveTwitchSession(refreshed)
+      current = refreshed
+      authSession = refreshed
+    }
+    const validated = await validateTwitchAccessToken(
+      current.accessToken,
+      preferences.interactiveChatEnabled
+    )
+    const nextSession = { ...current, ...validated }
+    await saveTwitchSession(nextSession)
+    authSession = nextSession
+    loadSignedInAvatar(nextSession)
+    authError = null
+    publishTwitchAuthStatus()
+  } catch (error) {
+    if (error instanceof TwitchAuthError && !error.invalidToken) {
+      authError = error.message
+      publishTwitchAuthStatus()
+      scheduleTwitchTokenValidation()
+      return
+    }
+    console.warn('[StreamShell Backend] Twitch session expired or was revoked.')
+    const channelToReconnect = activeChannel
+    authSession = null
+    authAvatarUrl = null
+    await clearStoredTwitchSession()
+    teardownTwitchClient()
+    if (preferences.interactiveChatEnabled) {
+      preferences = { ...preferences, interactiveChatEnabled: false }
+      await savePreferences(preferences)
+    }
+    authError = 'Your Twitch session expired. Sign in again to continue.'
+    publishTwitchAuthStatus()
+    notifyOverlayClear()
+    if (channelToReconnect) connectToTwitch(channelToReconnect)
+    return
+  }
+  scheduleTwitchTokenValidation()
+}
+
+async function startTwitchLogin(): Promise<TwitchAuthSession> {
+  if (authPromise) return authPromise
+
+  const controller = new AbortController()
+  authAbortController = controller
+  authDeviceAuthorization = null
+  const pending = (async (): Promise<TwitchAuthSession> => {
+    const deviceAuthorization = await requestTwitchDeviceAuthorization(true, controller.signal)
+    authDeviceAuthorization = {
+      userCode: deviceAuthorization.userCode,
+      verificationUri: deviceAuthorization.verificationUri
+    }
+    authError = null
+    publishTwitchAuthStatus()
+    const tokens = await pollTwitchDeviceAuthorization(
+      deviceAuthorization.deviceCode,
+      deviceAuthorization.scopes,
+      deviceAuthorization.interval,
+      deviceAuthorization.expiresAt,
+      controller.signal
+    )
+    const validated = await validateTwitchAccessToken(tokens.accessToken, true)
+    const session: TwitchAuthSession = {
+      ...validated,
+      refreshToken: tokens.refreshToken
+    }
+    await saveTwitchSession(session)
+    return session
+  })()
+
+  authPromise = pending
+    .then((session) => {
+      authSession = session
+      loadSignedInAvatar(session)
+      authError = null
+      authDeviceAuthorization = null
+      scheduleTwitchTokenValidation()
+      publishTwitchAuthStatus()
+      if (activeChannel) {
+        console.log(
+          `[StreamShell Backend] Reconnecting ${activeChannel} with the signed-in Twitch account.`
+        )
+        connectToTwitch(activeChannel, true)
+      }
+      return session
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      authError = /cancelled/i.test(message) ? null : message
+      authDeviceAuthorization = null
+      publishTwitchAuthStatus()
+      throw error
+    })
+    .finally(() => {
+      authPromise = null
+      authAbortController = null
+    })
+  return authPromise
+}
+
+function cancelTwitchLogin(): void {
+  authAbortController?.abort()
+  authAbortController = null
+  authDeviceAuthorization = null
+  authError = null
+  publishTwitchAuthStatus()
+}
+
+async function initializeTwitchAuth(): Promise<void> {
+  try {
+    const saved = await loadStoredTwitchSession()
+    if (saved) {
+      let current = saved
+      try {
+        if (current.expiresAt <= Date.now() + 5 * 60 * 1000 && current.refreshToken) {
+          current = await refreshTwitchSession(current)
+          await saveTwitchSession(current)
+        }
+        if (current.expiresAt <= Date.now()) {
+          throw new TwitchAuthError('The Twitch session expired.', true)
+        }
+        const validated = await validateTwitchAccessToken(
+          current.accessToken,
+          preferences.interactiveChatEnabled
+        )
+        const session = { ...current, ...validated }
+        await saveTwitchSession(session)
+        authSession = session
+        loadSignedInAvatar(session)
+        authError = null
+        scheduleTwitchTokenValidation()
+        publishTwitchAuthStatus()
+        return
+      } catch (error) {
+        if (error instanceof TwitchAuthError && !error.invalidToken) {
+          if (current.expiresAt > Date.now()) {
+            authSession = current
+            loadSignedInAvatar(current)
+            scheduleTwitchTokenValidation()
+          } else if (current.refreshToken) {
+            authSession = null
+            if (authValidationTimer) clearTimeout(authValidationTimer)
+            authValidationTimer = setTimeout(() => {
+              authValidationTimer = null
+              void initializeTwitchAuth()
+            }, 60 * 1000)
+          }
+          authError = error.message
+          publishTwitchAuthStatus()
+          if (current.expiresAt > Date.now() || current.refreshToken) return
+        }
+        console.warn('[StreamShell Backend] Saved Twitch session is no longer valid.')
+      }
+      await clearStoredTwitchSession()
+      authSession = null
+      authAvatarUrl = null
+      if (preferences.interactiveChatEnabled) {
+        preferences = { ...preferences, interactiveChatEnabled: false }
+        await savePreferences(preferences)
+      }
+    } else if (preferences.interactiveChatEnabled) {
+      preferences = { ...preferences, interactiveChatEnabled: false }
+      await savePreferences(preferences)
+    }
+  } catch (error) {
+    authError = error instanceof Error ? error.message : String(error)
+    console.error('[StreamShell Backend] Could not load saved Twitch credentials:', error)
+  }
+
+  publishTwitchAuthStatus()
 }
 
 function getStringRecord(value: unknown): Record<string, string> | null {
@@ -394,8 +797,66 @@ app.whenReady().then(async () => {
     return preferences
   })
 
+  ipcMain.handle('auth:get-status', () => twitchAuthStatus())
+  ipcMain.handle('auth:login', async () => {
+    await startTwitchLogin()
+    return twitchAuthStatus()
+  })
+  ipcMain.handle('auth:cancel-login', () => {
+    cancelTwitchLogin()
+  })
+  ipcMain.handle('auth:logout', async () => {
+    cancelTwitchLogin()
+    const channelToReconnect = activeChannel
+    teardownTwitchClient()
+    if (authValidationTimer) clearTimeout(authValidationTimer)
+    authValidationTimer = null
+    const token = authSession?.accessToken
+    const refreshToken = authSession?.refreshToken
+    authSession = null
+    authAvatarUrl = null
+    authError = null
+    let revokeError: string | null = null
+    if (token) {
+      try {
+        await revokeTwitchAccessToken(token)
+      } catch (error) {
+        revokeError = error instanceof Error ? error.message : String(error)
+        console.warn('[StreamShell Backend] Could not revoke Twitch token on sign-out:', error)
+      }
+    }
+    if (refreshToken) {
+      try {
+        await revokeTwitchAccessToken(refreshToken)
+      } catch (error) {
+        revokeError ??= error instanceof Error ? error.message : String(error)
+        console.warn(
+          '[StreamShell Backend] Could not revoke Twitch refresh token on sign-out:',
+          error
+        )
+      }
+    }
+    await clearStoredTwitchSession()
+    if (preferences.interactiveChatEnabled) {
+      preferences = { ...preferences, interactiveChatEnabled: false }
+      await savePreferences(preferences)
+    }
+    authError = revokeError
+    publishTwitchAuthStatus()
+    notifyOverlayClear()
+    if (channelToReconnect) connectToTwitch(channelToReconnect)
+    return twitchAuthStatus()
+  })
+
   ipcMain.handle('preferences:set', async (_event, value: unknown) => {
     const next = validatePreferences(value)
+    if (
+      next.interactiveChatEnabled &&
+      !preferences.interactiveChatEnabled &&
+      !authSession?.scopes.includes('chat:edit')
+    ) {
+      throw new Error('Sign in again and grant chat:edit before enabling interactive chat.')
+    }
     await savePreferences(next)
     if (next.maxConcurrentImageDownloads !== preferences.maxConcurrentImageDownloads) {
       setMaxConcurrentImageDownloads(next.maxConcurrentImageDownloads)
@@ -448,6 +909,7 @@ app.whenReady().then(async () => {
   await ensureGnomeExtensionEnabled()
 
   createWindow()
+  void initializeTwitchAuth()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
