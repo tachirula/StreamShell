@@ -163,17 +163,28 @@ function App(): ReactElement {
   useEffect(() => {
     const offConnected = window.api.onTwitchConnected(({ channel: ch }) => {
       console.log('[Renderer] twitch:connected →', ch)
+      disconnectRequestedRef.current = false
       setErrorMsg(null)
       setStatus('connected')
     })
     const offError = window.api.onTwitchError(({ key, params }) => {
       const message = t(key, params)
       console.log('[Renderer] twitch:error →', message)
+      disconnectRequestedRef.current = false
       setErrorMsg(message)
       setStatus('error')
     })
     const offDisconnected = window.api.onTwitchDisconnected(({ reason }) => {
       console.log('[Renderer] twitch:disconnected →', reason)
+      if (disconnectRequestedRef.current) {
+        disconnectRequestedRef.current = false
+        setErrorMsg(null)
+        setStatus('idle')
+        return
+      }
+
+      setErrorMsg(t('twitch.error.disconnected', { reason: reason || 'Unknown reason' }))
+      setStatus('error')
     })
 
     return () => {
@@ -199,6 +210,7 @@ function App(): ReactElement {
   //   because `status` is no longer a dependency.
   useEffect(() => {
     const clean = channel.trim().toLowerCase()
+    let active = true
     const isForced = avatarLookupNonce !== prevNonceRef.current
     prevNonceRef.current = avatarLookupNonce
 
@@ -223,17 +235,28 @@ function App(): ReactElement {
     const delay = cached !== undefined || isForced ? 0 : 2000
 
     const timer = setTimeout(async () => {
-      const fresh = await window.api.getStreamerAvatar(clean)
-      setAvatarUrl(fresh)
-      setAvatarLoading(false)
-      setCachedAvatar(clean, fresh)
+      try {
+        const fresh = await window.api.getStreamerAvatar(clean)
+        setCachedAvatar(clean, fresh)
+        if (active) {
+          setAvatarUrl(fresh)
+          setAvatarLoading(false)
+        }
+      } catch (err) {
+        console.warn('[Renderer] Could not look up Twitch channel avatar:', err)
+        if (active) setAvatarLoading(false)
+      }
     }, delay)
 
-    return () => clearTimeout(timer)
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
   }, [channel, avatarLookupNonce])
 
-  const handleAction = () => {
-    if (status !== 'idle') {
+  const handleAction = (): void => {
+    if (status === 'connecting' || status === 'connected') {
+      disconnectRequestedRef.current = true
       window.api.disconnectChannel()
       setStatus('idle')
       setErrorMsg(null)
@@ -368,7 +391,15 @@ function App(): ReactElement {
         }
       `}</style>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '0.5rem' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          marginBottom: '0.5rem',
+          minWidth: 0
+        }}
+      >
         <img
           src={twitchLogo}
           alt="Twitch Logo"
@@ -474,7 +505,7 @@ function App(): ReactElement {
                 display: 'flex',
                 alignItems: 'flex-start',
                 gap: '12px',
-                width: '350px',
+                width: '100%',
                 maxWidth: '100%',
                 animation: 'fadeIn 0.3s ease-in-out'
               }}
@@ -511,7 +542,7 @@ function App(): ReactElement {
               display: 'flex',
               flexDirection: 'column',
               gap: '1rem',
-              width: '350px',
+              width: '100%',
               maxWidth: '100%'
             }}
           >
@@ -638,13 +669,13 @@ function App(): ReactElement {
               style={{
                 marginTop: '2rem',
                 padding: '1rem',
-                borderLeft: '4px solid #ef4444',
+                borderLeft: '4px solid #ff9f1c',
                 background: '#26262c',
                 borderRadius: '4px',
                 animation: 'fadeIn 0.3s ease-in-out'
               }}
             >
-              {t('panel.status.error')} <strong style={{ color: '#ef4444' }}>{errorMsg}</strong>
+              {t('panel.status.error')} <strong style={{ color: '#ff9f1c' }}>{errorMsg}</strong>
             </div>
           )}
         </>

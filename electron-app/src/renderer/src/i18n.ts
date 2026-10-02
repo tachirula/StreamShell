@@ -18,6 +18,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     'panel.status.error': 'Connection error:',
     'twitch.error.joinTimeout':
       'Could not join Twitch channel "{channel}" before the request timed out.',
+    'twitch.error.disconnected': 'Twitch connection was lost: {reason}',
     'twitch.error.twitchNotice': 'Twitch rejected the connection: {message}',
     'twitch.error.connectionFailed': 'Could not connect to Twitch: {reason}',
     'settings.open': 'Settings',
@@ -145,6 +146,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     'panel.status.error': 'Error al conectar:',
     'twitch.error.joinTimeout':
       'No se pudo entrar al canal de Twitch "{channel}" antes de que venciera el tiempo de espera.',
+    'twitch.error.disconnected': 'Se perdió la conexión con Twitch: {reason}',
     'twitch.error.twitchNotice': 'Twitch rechazó la conexión: {message}',
     'twitch.error.connectionFailed': 'No se pudo conectar a Twitch: {reason}',
     'settings.open': 'Configuración',

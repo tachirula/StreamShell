@@ -203,26 +203,25 @@ code {
     justify-content: flex-start;
   }
 
+  .app-shell:not(.settings-open) {
+    width: min(100%, 1100px);
+  }
+
   .app-shell.settings-open {
     width: 100%;
+    max-width: 1400px;
     height: 100%;
     overflow: hidden;
   }
 
   .settings-panel-scrollbar {
-    display: grid !important;
-    grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
-    align-content: start;
-    align-items: start;
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch;
     width: 100% !important;
-    max-height: calc(100% - 100px) !important;
+    max-height: calc(100% - 110px) !important;
+    min-height: 0;
     padding-right: 0.75rem !important;
-  }
-
-  .settings-panel-scrollbar > h2,
-  .settings-panel-scrollbar > [role='alert'],
-  .settings-panel-scrollbar > p {
-    grid-column: 1 / -1;
   }
 }
 
