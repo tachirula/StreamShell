@@ -1,20 +1,13 @@
 import { app } from 'electron'
 import { mkdir, readFile, rename, writeFile } from 'fs/promises'
 import { join } from 'path'
-import { MAX_CONCURRENT_IMAGE_DOWNLOADS } from '../shared/settings-constraints'
+import {
+  DEFAULT_CONCURRENT_IMAGE_DOWNLOADS,
+  MAX_CONCURRENT_IMAGE_DOWNLOADS
+} from '../shared/settings-constraints'
+import type { AppPreferences } from '../shared/types'
 
-export interface AppPreferences {
-  chatWidth: number
-  backgroundOpacity: number
-  maxVisibleMessages: number
-  historyEnabled: boolean
-  historyLimit: number
-  thirdPartyEmotesEnabled: boolean
-  toggleChatShortcut: string
-  emoteImageScale: '1x' | '3x' | '4x'
-  emoteBestQuality: boolean
-  maxConcurrentImageDownloads: number
-}
+export type { AppPreferences } from '../shared/types'
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
   chatWidth: 360,
@@ -22,11 +15,16 @@ export const DEFAULT_PREFERENCES: AppPreferences = {
   maxVisibleMessages: 10,
   historyEnabled: false,
   historyLimit: 20,
+  disableClickThrough: false,
+  interactiveChatEnabled: false,
+  clickableProfilesEnabled: false,
+  profileMessageLimit: 100,
   thirdPartyEmotesEnabled: true,
   toggleChatShortcut: '',
   emoteImageScale: '3x',
   emoteBestQuality: true,
-  maxConcurrentImageDownloads: MAX_CONCURRENT_IMAGE_DOWNLOADS
+  maxConcurrentImageDownloads: DEFAULT_CONCURRENT_IMAGE_DOWNLOADS,
+  animatedEmotesEnabled: true
 }
 
 const SETTINGS_FILE = 'preferences.json'
@@ -44,19 +42,15 @@ export function validatePreferences(value: unknown): AppPreferences {
     throw new Error('Chat width must be between 280 and 600 pixels')
   }
   const backgroundOpacity = candidate.backgroundOpacity ?? DEFAULT_PREFERENCES.backgroundOpacity
-  if (
-    !Number.isInteger(backgroundOpacity) ||
-    backgroundOpacity < 0 ||
-    backgroundOpacity > 100
-  ) {
+  if (!Number.isInteger(backgroundOpacity) || backgroundOpacity < 0 || backgroundOpacity > 100) {
     throw new Error('Background opacity must be between 0 and 100 percent')
   }
   if (
     !Number.isInteger(candidate.maxVisibleMessages) ||
     candidate.maxVisibleMessages! < 3 ||
-    candidate.maxVisibleMessages! > 100
+    candidate.maxVisibleMessages! > 20
   ) {
-    throw new Error('Visible message limit must be between 3 and 100')
+    throw new Error('Visible message limit must be between 3 and 20')
   }
   if (typeof candidate.historyEnabled !== 'boolean') {
     throw new Error('History enabled must be a boolean')
@@ -67,6 +61,30 @@ export function validatePreferences(value: unknown): AppPreferences {
     candidate.historyLimit! > 100
   ) {
     throw new Error('History limit must be between 5 and 100')
+  }
+  const interactiveChatEnabled =
+    candidate.interactiveChatEnabled ?? DEFAULT_PREFERENCES.interactiveChatEnabled
+  const disableClickThrough =
+    candidate.disableClickThrough ?? DEFAULT_PREFERENCES.disableClickThrough
+  const clickableProfilesEnabled =
+    candidate.clickableProfilesEnabled ?? DEFAULT_PREFERENCES.clickableProfilesEnabled
+  const profileMessageLimit =
+    candidate.profileMessageLimit ?? DEFAULT_PREFERENCES.profileMessageLimit
+  if (typeof interactiveChatEnabled !== 'boolean') {
+    throw new Error('Interactive chat enabled must be a boolean')
+  }
+  if (typeof disableClickThrough !== 'boolean') {
+    throw new Error('Disable click-through must be a boolean')
+  }
+  if (typeof clickableProfilesEnabled !== 'boolean') {
+    throw new Error('Clickable profiles enabled must be a boolean')
+  }
+  if (
+    !Number.isInteger(profileMessageLimit) ||
+    profileMessageLimit < 1 ||
+    profileMessageLimit > 500
+  ) {
+    throw new Error('Profile message limit must be between 1 and 500')
   }
   const thirdPartyEmotesEnabled =
     candidate.thirdPartyEmotesEnabled ?? DEFAULT_PREFERENCES.thirdPartyEmotesEnabled
@@ -88,6 +106,11 @@ export function validatePreferences(value: unknown): AppPreferences {
   if (typeof emoteBestQuality !== 'boolean') {
     throw new Error('Emote best quality must be a boolean')
   }
+  const animatedEmotesEnabled =
+    candidate.animatedEmotesEnabled ?? DEFAULT_PREFERENCES.animatedEmotesEnabled
+  if (typeof animatedEmotesEnabled !== 'boolean') {
+    throw new Error('Animated emotes enabled must be a boolean')
+  }
   const maxConcurrentImageDownloads =
     candidate.maxConcurrentImageDownloads ?? DEFAULT_PREFERENCES.maxConcurrentImageDownloads
   if (
@@ -105,12 +128,39 @@ export function validatePreferences(value: unknown): AppPreferences {
     maxVisibleMessages: Math.min(candidate.maxVisibleMessages!, 20),
     historyEnabled: candidate.historyEnabled,
     historyLimit: candidate.historyLimit!,
+    disableClickThrough,
+    interactiveChatEnabled: disableClickThrough && interactiveChatEnabled,
+    clickableProfilesEnabled: disableClickThrough && clickableProfilesEnabled,
+    profileMessageLimit,
     thirdPartyEmotesEnabled,
     toggleChatShortcut,
     emoteImageScale,
     emoteBestQuality,
-    maxConcurrentImageDownloads
+    maxConcurrentImageDownloads,
+    animatedEmotesEnabled
   }
+}
+
+function normalizeStoredPreferences(value: unknown): AppPreferences {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    console.warn('[StreamShell Backend] Saved preferences are not an object; using defaults.')
+    return { ...DEFAULT_PREFERENCES }
+  }
+
+  const stored = value as Record<string, unknown>
+  let normalized = { ...DEFAULT_PREFERENCES }
+  for (const key of Object.keys(DEFAULT_PREFERENCES) as (keyof AppPreferences)[]) {
+    if (!(key in stored)) continue
+    try {
+      normalized = validatePreferences({ ...normalized, [key]: stored[key] })
+    } catch (error) {
+      console.warn(
+        `[StreamShell Backend] Invalid saved preference "${key}"; using its default:`,
+        error
+      )
+    }
+  }
+  return normalized
 }
 
 export async function loadPreferences(): Promise<AppPreferences> {
@@ -122,39 +172,15 @@ export async function loadPreferences(): Promise<AppPreferences> {
       parsed = JSON.parse(raw)
     } catch (err) {
       console.warn('[StreamShell Backend] Invalid preferences; using defaults:', err)
-      return DEFAULT_PREFERENCES
+      return { ...DEFAULT_PREFERENCES }
     }
-    let migrated = false
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const stored = parsed as Record<string, unknown>
-      if (
-        typeof stored.maxConcurrentImageDownloads === 'number' &&
-        Number.isInteger(stored.maxConcurrentImageDownloads) &&
-        stored.maxConcurrentImageDownloads > MAX_CONCURRENT_IMAGE_DOWNLOADS
-      ) {
-        parsed = {
-          ...stored,
-          maxConcurrentImageDownloads: MAX_CONCURRENT_IMAGE_DOWNLOADS
-        }
-        migrated = true
-      }
-    }
-    let preferences: AppPreferences
-    try {
-      preferences = validatePreferences(parsed)
-    } catch (err) {
-      console.warn('[StreamShell Backend] Invalid preferences; using defaults:', err)
-      return DEFAULT_PREFERENCES
-    }
-    if (migrated) {
-      console.warn(
-        `[StreamShell Backend] Capped saved image download concurrency at ${MAX_CONCURRENT_IMAGE_DOWNLOADS}.`
-      )
+    const preferences = normalizeStoredPreferences(parsed)
+    if (JSON.stringify(parsed) !== JSON.stringify(preferences)) {
       await savePreferences(preferences)
     }
     return preferences
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return DEFAULT_PREFERENCES
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ...DEFAULT_PREFERENCES }
     throw err
   }
 }
