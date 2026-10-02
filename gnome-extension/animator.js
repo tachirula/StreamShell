@@ -46,7 +46,7 @@ export class EmoteAnimator {
         this._paused = false;
         this._enabled = true;
         this._destroyed = false;
-        this._warned = false;
+        this._warnings = new Set();
     }
 
     // --- Public API ---------------------------------------------------------
@@ -62,9 +62,8 @@ export class EmoteAnimator {
         try {
             let entry = animate ? this._entries.get(path) : null;
             if (!entry && animate && this._enabled) {
-                if (this._entries.size >= this._maxAnimated)
-                    this._evictOldestEntry();
-                entry = this._createEntry(path);
+                if (this._entries.size < this._maxAnimated)
+                    entry = this._createEntry(path);
             }
 
             if (entry)
@@ -202,21 +201,6 @@ export class EmoteAnimator {
         return actor;
     }
 
-    _evictOldestEntry() {
-        const oldest = this._entries.values().next().value;
-        if (!oldest) return;
-
-        try {
-            oldest.iter = oldest.anim.get_iter(null);
-            this._upload(oldest, oldest.iter.get_pixbuf());
-        } catch (e) {
-            this._warnOnce(`could not freeze ${oldest.path} before eviction: ${e}`);
-        }
-
-        this._entries.delete(oldest.path);
-        this._updateTimer();
-    }
-
     _release(entry, actor) {
         if (this._destroyed) return;
 
@@ -340,8 +324,8 @@ export class EmoteAnimator {
     }
 
     _warnOnce(message) {
-        if (this._warned) return;
-        this._warned = true;
+        if (this._warnings.has(message)) return;
+        this._warnings.add(message);
         console.warn(`[StreamShell] animator: ${message}`);
     }
 }
